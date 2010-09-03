@@ -1,0 +1,129 @@
+QUICK INSTALL 
+----------------
+If you can read this file you already unpack tar.gz file with this sources ;) 
+
+WARNING: This is only alpha-release.  For quick run you must run smppserver only from current directory. 
+It's quickest way to run it on all Unix-like systems. 
+
+You must install by usual way next Perl modules. 
+Usual way - is perl Makefile.PL; make; make install; 
+Or install package via repository instrument. 
+
+IPC::ShareLite 
+Data::Structure::Util 
+Unix::Syslog
+Data::UUID
+Cache::Memcached::Fast
+DBI
+DBD::Pg
+DBD::MySQL
+
+
+DATABASE PREPARING
+------------------
+
+$ mysql -u root -p 
+> create database mydb; 
+> source mydb.sql
+
+Grant all privileges on new database to some user. 
+
+
+
+CONFIGURATION FILES
+---------------------
+
+Only ./smppserver.conf 
+
+Section <smpp> - for SMPP-server listen parameters; 
+Section <auth> - for Authentication Database access parameters; 
+Section <shm> - do not edit it. 
+auth.query - it's a key for good authentication :-)
+
+
+<in_query> and <out_query> : no comments; 
+
+
+RUN
+------
+
+$./smppserver 
+Must work. Read the /var/log/messages. 
+
+$ ps ax | grep smpp 
+Must show 3 processes; 
+
+For DEBUG porposes default mode is not daemon. It will more messages to console. 
+If you want to daemonize smppserver run it with --daemon option : 
+
+$ ./smppserver --daemon 
+$ ./smppserver-stop.sh 
+
+
+SELFTEST
+--------
+
+Please edit $dsn,$user,$password  in first strings in smppsvrtst.pl and run it. 
+
+
+
+STOP
+-----
+
+$ kill -TERM `cat /var/run/NetSDS/smppserver.pid`
+$ ./smppserver-stop.sh 
+
+
+
+ALGORYTHM DESCRIPTION
+----------------------
+
+When ESME connect to SMPPd first time parameters of ESME will be loaded to memory for quick working with badwidth,max_connection and other parameters. If the future by SIGNAL USR1 admin will refresh these parameters;  
+
+When smppserver start it burn two children. InQueue and OutQueue handlers. 
+
+
+MESSAGE EXCHANGE
+----------------
+
+Attention: SMPPserver works with hexadecimal string as text of short message in the database. 
+Look into smppsvrtst.pl for example. It uses our conv_str_hex(string) to convert some text to hexadecimal string.
+You may find source of this function in NetSDS/Utils/Convert.pm 
+
+You must encode your SM text before put it onto database. And decode it after select new messages from ESME. 
+
+ESME can see original text, or binary, or DLR, etc. 
+
+
+CHANGES
+-------
+
+Saturday, 28.08.10 
+-------
++ Find ESME_ID while authentication and load it to memory 
++ Insert ESME_ID while processing MT 
++ Realize unbind
++ Closing socket after unbind_resp
++ Reading max_connections and drop any connections after {max_connection} parameters from ESME
++ Closing socket after incorrect authentication 
+
+Sunday, 29.08.10
+------------
++ 5 tests:
+* make connect 
+* bind_transceiver + empty PDU 
+* bind_transceiver + non-empty PDU 
+* submit_sm
+* 1000 MT SMS 
+
+Monday 30.08.10 - Friday 03.09.10 
+----------------------------------
++ Optimized code 
++ Fixed MANY BUGS 
++ Already tested by 8 tests;
++ Added new 3 tests: 
+* Receive single MO 
+* Insert into database 1000 MO SMS 
+* Receive 1000 MO SMS 
+
+
