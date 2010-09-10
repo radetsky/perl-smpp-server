@@ -287,6 +287,12 @@ sub _auth_esme {
 			$this->speak( "[$$] Allowed src ip for " . $system_id . " is NULL. Default value set to 0.0.0.0 " );
 		}
 
+		unless ( defined( $ESME->{$system_id}->{'bandwidth'} ) ) {
+			$ESME->{$system_id}->{'bandwidth'} = 1;
+			$this->log( "warning", "Setting bandwidth for $system_id to 1/s" );
+			$this->speak("[$$] Setting bandwidth for $system_id to 1/s");
+		}
+
 	} else {
 
 		return undef;
@@ -568,6 +574,55 @@ sub _authorize_submit {
 	return undef;
 } ## end sub _authorize_submit
 
+=item B<_throttling> 
+
+Check for count SMS in seconds 
+
+=cut 
+
+sub _throttling {
+
+	my ( $this, $login ) = @_;
+
+	# If last_message_timestamp does not exist, accept;
+	unless ( defined( $ESME->{$login}->{'last_message_timestamp'} ) ) {
+		$ESME->{$login}->{'last_message_timestamp'} = time();
+		return 1;
+	}
+
+	my $last_message_timestamp = $ESME->{$login}->{'last_message_timestamp'};
+	my $new_message_timestamp  = time();
+
+	my $difference = $new_message_timestamp - $last_message_timestamp;
+
+	if ( $difference > 0 ) {
+		$ESME->{$login}->{'last_message_timestamp'}  = $new_message_timestamp;
+		$ESME->{$login}->{'last_second_sm_received'} = 1;
+		return 1;    # accept
+	}
+
+	if ( $difference < 0 ) {
+		$ESME->{$login}->{'last_message_timestamp'}  = $new_message_timestamp;
+		$ESME->{$login}->{'last_second_sm_received'} = 1;
+		return 1;    # It's stupid error; accept;
+	}
+
+	# If difference  == 0; Count messages that was received while current timestamp
+	unless ( defined( $ESME->{$login}->{'last_second_sm_received'} ) ) {
+		$ESME->{$login}->{'last_second_sm_received'} = 0;
+	}
+
+	if ( ( $ESME->{$login}->{'last_second_sm_received'} + 1 ) > $ESME->{$login}->{'bandwidth'} ) {
+		$this->log("warning","Deny send SMS from $login for THROTTLING reason.");
+		$this->speak("[$$] Deny send SMS from $login for THROTTLING reason.");
+		return undef;
+		# Deny
+	}
+	$ESME->{$login}->{'last_second_sm_received'} = $ESME->{$login}->{'last_second_sm_received'} + 1;
+	return 1;    # accept
+
+} ## end sub _throttling
+
 =item B<cmd_submit_sm> 
 
 We are replaced parent method because we need to sent message to IO::Socket::INET not MemcacheQ. 
@@ -584,11 +639,28 @@ sub cmd_submit_sm {
 		2 => 'ucs2',
 	);
 
-	my $resp_status = undef;    # response command status
+	my $resp_status = undef;          # response command status
 	my $message_id  = make_uuid();    # message id on CPA (UUID style)
 
 	# Check if client is authenticated
 	if ( ( $hdl->{authenticated} ) and ( $this->_authorize_submit( $pdu, $hdl ) ) ) {
+
+		# Throttling ?
+
+		unless ( defined( $this->_throttling( $hdl->{system_id} ) ) ) {
+
+			$resp_status = 0x00000058;    # ESME_RTHROTTLED
+
+			$hdl->{smpp}->submit_sm_resp(
+				seq        => $pdu->{seq},
+				status     => $resp_status,
+				message_id => $message_id,
+				async      => 1,
+			);
+
+			return;
+
+		}
 
 		# Create empty message
 		my $queue_msg = {
@@ -751,8 +823,8 @@ sub cmd_unbind {
 	undef $this->{handlers}->{ $hdl->{id} };
 
 	# decrease already connected value for system_id
-	$ESME->{$system_id}->{'already_connected'} = $ESME->{$system_id}->{'already_connected'} - 1;
-	$this->log( "info", "Descrease already connected value for \"$system_id\". New value = " . $ESME->{$system_id}->{'already_connected'} );
+	
+	$this->_decrease_already_connected( $hdl->{system_id} );
 
 }    # end sub cmd unbind
 
