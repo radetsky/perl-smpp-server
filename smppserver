@@ -807,8 +807,12 @@ sub cmd_unbind {
 		status => $pdu->{status},
 	);
 
+
+	my $login = $hdl->{system_id};
+
 	# Update SHM struture (only for defined system_id)
-	if ( $hdl->{system_id} ) {
+	# If it was last connect 
+	if ( ( $hdl->{system_id} ) and ( $ESME->{$login}->{'already_connected'} == 1 ) ) {
 		$this->shm->lock;
 		my $list = decode_json( $this->shm->fetch );
 		delete $list->{ $hdl->{system_id} };
@@ -1235,8 +1239,9 @@ sub _process_socket {
 			$hdl->{smpp}->close();
 			undef $this->{handlers}->{ $hdl->{id} };
 
+			my $login = $hdl->{system_id};
 			# Update SHM struture (only for defined system_id)
-			if ( $hdl->{system_id} ) {
+			if ( ( $hdl->{system_id} ) and ( $ESME->{$login}->{'already_connected'} == 0 ) ) {
 				$this->shm->lock;
 				my $list = decode_json( $this->shm->fetch );
 				delete $list->{ $hdl->{system_id} };
