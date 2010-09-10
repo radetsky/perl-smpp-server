@@ -59,6 +59,31 @@ use Time::HiRes qw(usleep);
 
 use Data::Dumper;
 
+# SMPP PDU command_id table
+use constant cmd_tab => {
+	0x80000000 => 'generic_nack',
+	0x00000001 => 'bind_receiver',
+	0x80000001 => 'bind_receiver_resp',
+	0x00000002 => 'bind_transmitter',
+	0x80000002 => 'bind_transmitter_resp',
+	0x00000003 => 'query_sm',
+	0x80000003 => 'query_sm_resp',
+	0x00000004 => 'submit_sm',
+	0x80000004 => 'submit_sm_resp',
+	0x80000005 => 'deliver_sm_resp',
+	0x00000006 => 'unbind',
+	0x80000006 => 'unbind_resp',
+	0x00000007 => 'replace_sm',
+	0x80000007 => 'replace_sm_resp',
+	0x00000008 => 'cancel_sm',
+	0x80000008 => 'cancel_sm_resp',
+	0x00000009 => 'bind_transceiver',
+	0x80000009 => 'bind_transceiver_resp',
+	0x0000000b => 'outbind',
+	0x00000015 => 'enquire_link',
+	0x80000015 => 'enquire_link_resp',
+};
+
 my @CHILDREN = array();
 my $ESME     = undef;
 
@@ -116,8 +141,8 @@ sub initialize {
 		Proc::Daemon::Init;
 	}
 
-    # Process PID file if necessary
-	if ( $this->use_pidfile  ) {
+	# Process PID file if necessary
+	if ( $this->use_pidfile ) {
 		if ( Proc::PID::File->running( dir => $this->pid_dir, name => $this->{name} ) ) {
 			$this->log( "error", "Application already running, stop immediately!" );
 			die "Application already running, stop immediately!";
@@ -184,7 +209,7 @@ sub _burn_children {
 	if ( $pid == 0 ) {
 		$this->speak("[$$] Running NetSDS::App::SMSTradeOutQ");
 		my $smsout = new NetSDS::App::SMSTradeOutQ();
-		$smsout->{conf} = $this->{conf};  
+		$smsout->{conf} = $this->{conf};
 		$smsout->run();
 		die "[$$] NetSDS::App::SMSTradeInQ died.";
 	}
@@ -199,7 +224,7 @@ sub _burn_children {
 	if ( $pid == 0 ) {
 		$this->speak("[$$] Running NetSDS::App::SMSTradeInQ");
 		my $smsin = new NetSDS::App::SMSTradeInQ();
-		$smsin->{conf} = $this->{conf}; 
+		$smsin->{conf} = $this->{conf};
 		$smsin->run();
 		die "[$$] NetSDS::App::SMSTradeInQ died.";
 	}
@@ -223,6 +248,10 @@ sub _auth_esme {
 
 	my ( $this, $login, $passwd ) = @_;
 
+	# Loggin' begin auth procedure
+	$this->log( "info", "Begin authentication for \"$login\"" );
+	$this->speak("[$$] Begin authentication for \"$login\"");
+
 	# Check DBMS connection and do reconnect if necessary
 	$this->_connect_db();
 
@@ -234,26 +263,29 @@ sub _auth_esme {
 	if ( my $res = $sth->fetchrow_hashref() ) {
 
 		my $system_id = $res->{'system_id'};
-		$ESME->{$system_id} = $res;
+
+		unless ( defined( $ESME->{$system_id} ) ) {    # if this record does not exist in hasref ESME
+			$ESME->{$system_id} = $res;                # add it
+		}    # else, just check already exist hashref
 
 		unless ( defined( $ESME->{$system_id}->{'already_connected'} ) ) {    # no connections ?
+			$this->log( "info", "Setting already_connected to 0" );
+			$this->speak("[$$] Setting already_connected to 0");
 			$ESME->{$system_id}->{'already_connected'} = 0;
 		}
 
 		# if database does not contain max_connections for ESME, default value = 1
-		$this->speak( "max_connections for " . $system_id . " is NULL. Default value set to 1. " );
 		unless ( defined( $ESME->{$system_id}->{'max_connections'} ) ) {
 			$ESME->{$system_id}->{'max_connections'} = 1;
+			$this->log( "warning", "Max_connections for " . $system_id . " is NULL. Default value set to 1. " );
+			$this->speak( "[$$] Max_connections for " . $system_id . " is NULL. Default value set to 1. " );
 		}
-
-		# increase already_connected
-
-		$ESME->{$system_id}->{'already_connected'} = $ESME->{$system_id}->{'already_connected'} + 1;
-		if ( $ESME->{$system_id}->{'already_connected'} > $ESME->{$system_id}->{'max_connections'} ) {
-			return undef;    # Do not authorize.
+		# if database does not contain allowed_ip, set default to 0.0.0.0
+		unless ( defined( $ESME->{$system_id}->{'allowed_ip'} ) ) {
+			$ESME->{$system_id}->{'allowed_ip'} = '0.0.0.0';
+			$this->log( "warning", "Allowed src ip for " . $system_id . " is NULL. Default value set to 0.0.0.0 " );
+			$this->speak( "[$$] Allowed src ip for " . $system_id . " is NULL. Default value set to 0.0.0.0 " );
 		}
-
-		return 1;
 
 	} else {
 
@@ -261,6 +293,62 @@ sub _auth_esme {
 
 	}
 } ## end sub _auth_esme
+
+=item B<_increase_already_connected> 
+
+Tries to increase already_connected value for ESME. If it reaches the max_connections will return undef else return 1
+
+=cut 
+
+sub _increase_already_connected {
+
+	my ( $this, $system_id ) = @_;
+
+	my $new_connection_num = $ESME->{$system_id}->{'already_connected'} + 1;
+	if ( $new_connection_num > $ESME->{$system_id}->{'max_connections'} ) {
+		$this->speak("[$$] ESME \"$system_id\" reached maximum of connections. ");
+		$this->log( "warning", "ESME \"$system_id\" reached maximum of connections. " );
+
+		return undef;    # Do not authorize.
+
+	}
+	$ESME->{$system_id}->{'already_connected'} = $ESME->{$system_id}->{'already_connected'} + 1;
+	$this->speak( "[$$] ESME \"$system_id\" already connected " . $ESME->{$system_id}->{'already_connected'} . " times" );
+	$this->log( "info", "ESME \"$system_id\" already connected " . $ESME->{$system_id}->{'already_connected'} . " times" );
+
+	return 1;
+
+}
+
+=item B<_decrease_already_connected> 
+
+Decrease already connected value.
+
+=cut 
+
+sub _decrease_already_connected {
+
+	my ( $this, $login ) = @_;
+
+	unless ( defined( $ESME->{$login} ) ) {
+		$this->log( "error", "Try to decrease already_connected for unexistent login $login" );
+		$this->speak("[$$] Try to decrease already_connected for unexistent login $login");
+		return undef;
+	}
+	$ESME->{$login}->{'already_connected'} = $ESME->{$login}->{'already_connected'} - 1;
+	if ( $ESME->{$login}->{'already_connected'} < 0 ) {
+		$this->log( "error", "Decreased already_connected for $login < 0!" );
+		$this->speak("[$$] Decreased already_connected for $login < 0!");
+		$ESME->{$login}->{'already_connected'} = 0;
+		return 1;
+	}
+
+	$this->log( "info", "Decrease already_connected for $login to " . $ESME->{$login}->{'already_connected'} );
+	$this->speak( "[$$] Decrease already_connected for $login to " . $ESME->{$login}->{'already_connected'} );
+
+	return 1;
+
+} ## end sub _decrease_already_connected
 
 sub _connect_db {
 
@@ -448,6 +536,38 @@ sub _init_in_queue {
 
 } ## end sub _init_in_queue
 
+=itemB<_authorize_submit> 
+
+Checks for allowed_src 
+
+=cut 
+
+sub _authorize_submit {
+
+	my ( $this, $pdu, $hdl ) = @_;
+
+	my $login = $hdl->{system_id};
+	my $src   = $pdu->{source_addr};
+
+	unless ( defined( $ESME->{$login}->{'allowed_src'} ) ) {
+		# NULL in database
+		return 1;
+	}
+	my @allowed_src = split( ',', $ESME->{$login}->{'allowed_src'} );
+
+	foreach my $source (@allowed_src) {
+		$source = str_trim($source);
+		if ( $source eq $src ) {
+
+			return 1;
+		}
+	}
+	$this->log( "warning", "Deny send SMS from '$src' for '$login'" );
+	$this->speak("[$$] Deny send SMS from '$src' for '$login'");
+
+	return undef;
+} ## end sub _authorize_submit
+
 =item B<cmd_submit_sm> 
 
 We are replaced parent method because we need to sent message to IO::Socket::INET not MemcacheQ. 
@@ -465,10 +585,10 @@ sub cmd_submit_sm {
 	);
 
 	my $resp_status = undef;    # response command status
-	my $message_id  = undef;    # message id on CPA (UUID style)
+	my $message_id  = make_uuid();    # message id on CPA (UUID style)
 
 	# Check if client is authenticated
-	if ( $hdl->{authenticated} ) {
+	if ( ( $hdl->{authenticated} ) and ( $this->_authorize_submit( $pdu, $hdl ) ) ) {
 
 		# Create empty message
 		my $queue_msg = {
@@ -488,7 +608,7 @@ sub cmd_submit_sm {
 		my $mclass = undef;    # default (ME specific according with GSM 03.38)
 
 		# Create UUID for new MT message
-		$message_id = make_uuid();
+		# $message_id = make_uuid();
 		$queue_msg->{message_id} = $message_id;
 
 		# Get source and destination addresses
@@ -510,6 +630,7 @@ sub cmd_submit_sm {
 		if ( ( $data_coding & 0b00010000 ) eq 0b00010000 ) {
 			$mclass = $data_coding & 0b00000011;
 		}
+
 		$queue_msg->{mclass} = $mclass;
 
 		# Determine coding
@@ -614,13 +735,6 @@ sub cmd_unbind {
 		status => $pdu->{status},
 	);
 
-	# Remove socket from select()
-	$this->selector->remove( $hdl->{smpp} );
-
-	# Close socket and remove record
-	$hdl->{smpp}->close();
-	undef $this->{handlers}->{ $hdl->{id} };
-
 	# Update SHM struture (only for defined system_id)
 	if ( $hdl->{system_id} ) {
 		$this->shm->lock;
@@ -629,11 +743,73 @@ sub cmd_unbind {
 		$this->shm->store( encode_json($list) );
 		$this->shm->unlock;
 	}
+	# Remove socket from select()
+	$this->selector->remove( $hdl->{smpp} );
+
+	# Close socket and remove record
+	$hdl->{smpp}->close();
+	undef $this->{handlers}->{ $hdl->{id} };
 
 	# decrease already connected value for system_id
 	$ESME->{$system_id}->{'already_connected'} = $ESME->{$system_id}->{'already_connected'} - 1;
+	$this->log( "info", "Descrease already connected value for \"$system_id\". New value = " . $ESME->{$system_id}->{'already_connected'} );
 
 }    # end sub cmd unbind
+
+=item B<_acl_source_ip> 
+
+Check allowed_ip field for peer host src ip. 
+
+=cut 
+
+sub _acl_source_ip {
+
+	my ( $this, $login, $peer ) = @_;
+
+	if ( $ESME->{$login}->{'allowed_ip'} eq '0.0.0.0' ) {
+		$this->log( "warning", "Allowed src ip for $login is anywhere (0.0.0.0). OK." );
+		$this->speak("[$$] Allowed src ip for $login is anywhere (0.0.0.0). OK.");
+		return 1;
+	}
+
+	my ( $peerhost, $peerport ) = split( ':', $peer );
+
+	my (@allowed) = split( ',', $ESME->{$login}->{'allowed_ip'} );
+
+	$this->log( "info", $login . ": peer : '" . $peerhost . "' : allowed : '" . $ESME->{$login}->{'allowed_ip'} . "'" );
+	$this->speak( "[$$] $login: peer : '" . $peerhost . "' : allowed : '" . $ESME->{$login}->{'allowed_ip'} . "'" );
+
+	foreach my $host (@allowed) {
+		$host = str_trim($host);
+		if ( $host eq $peerhost ) {
+			$this->log( "info", $login . " allow from " . $peerhost );
+			$this->speak( "[$$] $login  allow from " . $peerhost );
+			return 1;
+		}
+	}
+	$this->log( "warning", $login . " deny from " . $peerhost );
+	$this->speak("[$$] $login deny from $peerhost");
+
+	return undef;
+
+} ## end sub _acl_source_ip
+
+sub _authorize_esme {
+
+	my ( $this, $login, $hdl ) = @_;
+
+	my $resp_status = 0x00000000;
+
+	unless ( defined( $this->_acl_source_ip( $login, $hdl->{id} ) ) ) {
+		return 0x0000000E;    # ESME_RINVPASWD
+	}
+
+	unless ( defined( $this->_increase_already_connected($login) ) ) {
+		return 0x0000000E;    # ESME_RINVPASWD
+	}
+
+	return 0x00000000;        # OK
+}
 
 #
 # bind_transiever called when ESME connect to us in transiever mode (send and receive SMS in one connection )
@@ -651,28 +827,37 @@ sub cmd_bind_transceiver {
 
 	# Send error status if already authenticated
 	if ( $hdl->{authenticated} ) {
-
+		$this->speak("[$$] Already binded ESME authentication: $login");
 		$this->log( "warning", "Already binded ESME authentication: $login" );
-		$resp_status = 0x00000005;    # Already in bind state
+
+		if ( $this->_increase_already_connected($login) ) {
+			$resp_status = 0x00000005;    # Already in bind state
+		} else {
+			$resp_status = 0x0000000E;    # Do not authorize
+		}
 
 	} else {
 
 		# Authentication
 		if ( $this->_auth_esme( $login, $passwd ) ) {
-			$this->speak("ESME '$login' successfully authenticated");
+			$this->speak("[$$] ESME '$login' successfully authenticated");
 			$this->log( "info", "ESME '$login' successfully authenticated" );
 
-			# Update handlers
-			$this->{handlers}->{ $hdl->{id} }->{authenticated} = 1;
-			$this->{handlers}->{ $hdl->{id} }->{system_id}     = $login;
-			$this->{handlers}->{ $hdl->{id} }->{mode}          = 'transceiver';
+			$resp_status = $this->_authorize_esme( $login, $hdl );
+			if ( $resp_status == 0x00 ) {
 
-			# Update SHM struture
-			my $list = decode_json( $this->shm->fetch );
-			$list->{$login} = 1;
-			$this->shm->lock;
-			$this->shm->store( encode_json($list) );
-			$this->shm->unlock;
+				# Update handlers
+				$this->{handlers}->{ $hdl->{id} }->{authenticated} = 1;
+				$this->{handlers}->{ $hdl->{id} }->{system_id}     = $login;
+				$this->{handlers}->{ $hdl->{id} }->{mode}          = 'transceiver';
+
+				# Update SHM struture
+				my $list = decode_json( $this->shm->fetch );
+				$list->{$login} = 1;
+				$this->shm->lock;
+				$this->shm->store( encode_json($list) );
+				$this->shm->unlock;
+			}
 
 		} else {
 			$this->log( "warning", "Cant authenticate ESME: [$login:$passwd]" );
@@ -692,28 +877,17 @@ sub cmd_bind_transceiver {
 
 			# Close socket and remove record
 			$hdl->{smpp}->close();
+
 			undef $this->{handlers}->{ $hdl->{id} };
 
-			# Update SHM struture (only for defined system_id)
-			if ( $hdl->{system_id} ) {
-				$this->shm->lock;
-				my $list = decode_json( $this->shm->fetch );
-				delete $list->{ $hdl->{system_id} };
-				$this->shm->store( encode_json($list) );
-				$this->shm->unlock;
-			}
-
-			return undef;
-
 		} ## end else [ if ( $this->_auth_esme...
-
-		my $resp = $hdl->{smpp}->bind_transceiver_resp(
-			seq       => $pdu->{seq},
-			status    => $resp_status,                     # ESME_ROK
-			system_id => NetSDS::App::SMPP::SYSTEM_NAME,
-		);
-
 	} ## end else [ if ( $hdl->{authenticated...
+
+	my $resp = $hdl->{smpp}->bind_transceiver_resp(
+		seq       => $pdu->{seq},
+		status    => $resp_status,                     # ESME_ROK
+		system_id => NetSDS::App::SMPP::SYSTEM_NAME,
+	);
 
 } ## end sub cmd_bind_transceiver
 
@@ -731,20 +905,36 @@ sub cmd_bind_transmitter {
 	if ( $hdl->{authenticated} ) {
 
 		$this->log( "warning", "Already binded ESME authentication: $login" );
-		$resp_status = 0x00000005;    # Already in bind state
+		$this->speak("[$$] Already binded ESME authentication: $login");
+		if ( $this->_increase_already_connected($login) ) {
+			$resp_status = 0x00000005;    # Already in bind state
+		} else {
+			$resp_status = 0x0000000E;    # Do not authorize
+		}
 
 	} else {
 
 		# FIXME
 		# Authentication
 		if ( $this->_auth_esme( $login, $passwd ) ) {
-			$this->speak("ESME '$login' successfully authenticated");
+			$this->speak("[$$] ESME '$login' successfully authenticated");
 			$this->log( "info", "ESME '$login' successfully authenticated" );
+			$resp_status = $this->_authorize_esme( $login, $hdl );
+			if ( $resp_status == 0x00 ) {
 
-			# Update handlers
-			$this->{handlers}->{ $hdl->{id} }->{authenticated} = 1;
-			$this->{handlers}->{ $hdl->{id} }->{system_id}     = $login;
-			$this->{handlers}->{ $hdl->{id} }->{mode}          = 'transmitter';
+				# Update handlers
+				$this->{handlers}->{ $hdl->{id} }->{authenticated} = 1;
+				$this->{handlers}->{ $hdl->{id} }->{system_id}     = $login;
+				$this->{handlers}->{ $hdl->{id} }->{mode}          = 'transmitter';
+
+				# Update SHM struture
+				my $list = decode_json( $this->shm->fetch );
+				$list->{$login} = 1;
+				$this->shm->lock;
+				$this->shm->store( encode_json($list) );
+				$this->shm->unlock;
+
+			}
 
 		} else {
 			$this->log( "warning", "Cant authenticate ESME: [$login:$passwd]" );
@@ -763,26 +953,14 @@ sub cmd_bind_transmitter {
 			$hdl->{smpp}->close();
 			undef $this->{handlers}->{ $hdl->{id} };
 
-			# Update SHM struture (only for defined system_id)
-			if ( $hdl->{system_id} ) {
-				$this->shm->lock;
-				my $list = decode_json( $this->shm->fetch );
-				delete $list->{ $hdl->{system_id} };
-				$this->shm->store( encode_json($list) );
-				$this->shm->unlock;
-			}
-
-			return undef;
-
-		} ## end else [ if ( $this->_auth_esme...
-
-		my $resp = $hdl->{smpp}->bind_transmitter_resp(
-			seq       => $pdu->{seq},
-			status    => $resp_status,                     # ESME_ROK
-			system_id => NetSDS::App::SMPP::SYSTEM_NAME,
-		);
-
+		}
 	} ## end else [ if ( $hdl->{authenticated...
+
+	my $resp = $hdl->{smpp}->bind_transmitter_resp(
+		seq       => $pdu->{seq},
+		status    => $resp_status,                     # ESME_ROK
+		system_id => NetSDS::App::SMPP::SYSTEM_NAME,
+	);
 
 } ## end sub cmd_bind_transmitter
 
@@ -800,7 +978,11 @@ sub cmd_bind_receiver {
 	if ( $hdl->{authenticated} ) {
 
 		$this->log( "warning", "Already binded ESME authentication: $login" );
-		$resp_status = 0x00000005;    # Already in bind state
+		if ( $this->_increase_already_connected($login) ) {
+			$resp_status = 0x00000005;    # Already in bind state
+		} else {
+			$resp_status = 0x0000000E;    # Do not authorize
+		}
 
 	} else {
 
@@ -809,18 +991,21 @@ sub cmd_bind_receiver {
 		if ( $this->_auth_esme( $login, $passwd ) ) {
 			$this->speak("ESME '$login' successfully authenticated");
 			$this->log( "info", "ESME '$login' successfully authenticated" );
+			$resp_status = $this->_authorize_esme( $login, $hdl );
+			if ( $resp_status == 0x00 ) {
 
-			# Update handlers
-			$this->{handlers}->{ $hdl->{id} }->{authenticated} = 1;
-			$this->{handlers}->{ $hdl->{id} }->{system_id}     = $login;
-			$this->{handlers}->{ $hdl->{id} }->{mode}          = 'receiver';
+				# Update handlers
+				$this->{handlers}->{ $hdl->{id} }->{authenticated} = 1;
+				$this->{handlers}->{ $hdl->{id} }->{system_id}     = $login;
+				$this->{handlers}->{ $hdl->{id} }->{mode}          = 'receiver';
 
-			# Update SHM struture
-			my $list = decode_json( $this->shm->fetch );
-			$list->{$login} = 1;
-			$this->shm->lock;
-			$this->shm->store( encode_json($list) );
-			$this->shm->unlock;
+				# Update SHM struture
+				my $list = decode_json( $this->shm->fetch );
+				$list->{$login} = 1;
+				$this->shm->lock;
+				$this->shm->store( encode_json($list) );
+				$this->shm->unlock;
+			}
 
 		} else {
 			$this->log( "warning", "Cant authenticate ESME: [$login:$passwd]" );
@@ -839,28 +1024,17 @@ sub cmd_bind_receiver {
 
 			# Close socket and remove record
 			$hdl->{smpp}->close();
+
 			undef $this->{handlers}->{ $hdl->{id} };
 
-			# Update SHM struture (only for defined system_id)
-			if ( $hdl->{system_id} ) {
-				$this->shm->lock;
-				my $list = decode_json( $this->shm->fetch );
-				delete $list->{ $hdl->{system_id} };
-				$this->shm->store( encode_json($list) );
-				$this->shm->unlock;
-			}
-
-			return undef;
-
 		} ## end else [ if ( $this->_auth_esme...
-
-		my $resp = $hdl->{smpp}->bind_receiver_resp(
-			seq       => $pdu->{seq},
-			status    => $resp_status,                     # ESME_ROK
-			system_id => NetSDS::App::SMPP::SYSTEM_NAME,
-		);
-
 	} ## end else [ if ( $hdl->{authenticated...
+
+	my $resp = $hdl->{smpp}->bind_receiver_resp(
+		seq       => $pdu->{seq},
+		status    => $resp_status,                     # ESME_ROK
+		system_id => NetSDS::App::SMPP::SYSTEM_NAME,
+	);
 
 } ## end sub cmd_bind_receiver
 
@@ -960,6 +1134,89 @@ sub _deliver_sm {
 
 	$hdl->{out_seq}++;
 } ## end sub _deliver_sm
+
+sub _process_socket {
+	my ( $this, $hdl ) = @_;
+
+	# Determine peer IP and port
+	my $peer_addr = $hdl->{smpp}->peerhost;
+	my $peer_port = $hdl->{smpp}->peerport;
+
+	# Try to read PDU
+	my $pdu = $hdl->{smpp}->read_pdu();
+	if ( !$pdu ) {
+
+		# Disconnect if EOF
+		if ( $hdl->{smpp}->eof() ) {
+
+			$this->speak("[$$] EOF from ${peer_addr}:${peer_port}");
+			$this->log( "warning", "EOF from ${peer_addr}:${peer_port}" );
+
+			if ( $hdl->{system_id} ) {
+				$this->_decrease_already_connected( $hdl->{system_id} );
+			}
+
+			# Remove socket from select()
+			$this->selector->remove( $hdl->{smpp} );
+
+			# Close socket and remove record
+			$hdl->{smpp}->close();
+			undef $this->{handlers}->{ $hdl->{id} };
+
+			# Update SHM struture (only for defined system_id)
+			if ( $hdl->{system_id} ) {
+				$this->shm->lock;
+				my $list = decode_json( $this->shm->fetch );
+				delete $list->{ $hdl->{system_id} };
+				$this->shm->store( encode_json($list) );
+				$this->shm->unlock;
+			}
+
+		} else {
+
+			$this->speak("[$$] Incoming event arrived but no SMPP PDU!");
+			$this->log( "warning", "Incoming event arrived from [${peer_addr}:${peer_port}] but no SMPP PDU!" );
+
+		}
+
+	} else {
+
+		# Process incoming PDU
+		my $pdu_cmd = "unknown";
+		if ( cmd_tab->{ $pdu->{cmd} } ) {
+			$pdu_cmd = cmd_tab->{ $pdu->{cmd} };
+		}
+
+		$this->speak("[$$] PDU arrived: $pdu_cmd");
+
+		# Determine method name to dispatch PDU call
+		my $method_name = "cmd_" . $pdu_cmd;
+
+		if ( $pdu_cmd eq 'enquire_link' ) {
+
+			# process enqiure_link locally
+			$this->cmd_enquire_link( $pdu, $hdl );
+
+		} elsif ( ( $pdu_cmd =~ /^bind_(transceiver|transmitter|receiver)/ ) and $this->can($method_name) ) {
+
+			# Process known authentication methods
+			$this->$method_name( $pdu, $hdl );
+
+		} elsif ( $this->can($method_name) and $hdl->{authenticated} ) {
+
+			# process known PDUs
+			$this->$method_name( $pdu, $hdl );
+
+		} else {
+
+			# PDU unknown - damn it
+			$this->cmd_unknown( $pdu, $hdl );
+
+		}
+
+	} ## end else [ if ( !$pdu )
+
+} ## end sub _process_socket
 
 1;
 #===============================================================================

@@ -496,7 +496,7 @@ sub _process_socket {
 			$pdu_cmd = cmd_tab->{ $pdu->{cmd} };
 		}
 
-		$this->speak("PDU arrived: $pdu_cmd");
+		$this->speak("[$$] PDU arrived: $pdu_cmd");
 
 		# Determine method name to dispatch PDU call
 		my $method_name = "cmd_" . $pdu_cmd;

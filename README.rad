@@ -126,4 +126,28 @@ Monday 30.08.10 - Friday 03.09.10
 * Insert into database 1000 MO SMS 
 * Receive 1000 MO SMS 
 
+Monday 06.09.10 - Friday 10.09.10 
+----------------------------------
++ tests: 
+* enquire_link 
+* connect to server more than 1 times 
+* bind_transmitter more than 1 times 
+
++ Bug fixed to use shared memory 
++ Other bug fixes 
++ Realized reach max_connections check: 
+* in same connection 
+* in new connection 
+
++ EOF works well! 
++ increase and decrease already_connected works well 
+
++ ACL from allowed_ip works! tested manually. 
++ ACL from allowed_src works. Test No. 12 in testscript. 
+
+
+
+
+Rad, take a look for new issues in redmine://Wiki  ;-) 
+
 
