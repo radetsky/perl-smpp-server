@@ -214,7 +214,7 @@ for (my $x = 0; $x < 1000; $x++) {
 		die "fail 14: pdu->status != 0x00 in $x \n"; 
 	} 
 	push @many_connects,$smpp; 
-	print "already connected: ".($x+1)."\n"; 
+	#print "already connected: ".($x+1)."\n"; 
 
 }
 

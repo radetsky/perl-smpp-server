@@ -93,6 +93,31 @@ sub new {
 #__PACKAGE__->mk_accessors('user');
 __PACKAGE__->mk_accessors(qw/msgdbh/);
 __PACKAGE__->mk_accessors(qw/msgsth/);
+__PACKAGE__->mk_accessors('shm');    # Shared memory interconnection area
+
+sub _init_shm {
+	my ($this) = shift;
+
+	my $shmseg = $this->{conf}->{'shm'}->{'segment'};
+	unless ( defined($shmseg) ) {
+		$shmseg = 1987;
+	}
+
+	my $share = new IPC::ShareLite(
+		-key     => $shmseg,
+		-create  => 'no',
+		-destroy => 'no'
+	);
+	$this->{'shmseg'} = $shmseg;
+
+	unless ( defined($share) ) {
+		return undef;
+	}
+
+	$this->shm($share);
+
+	return 1;
+} ## end sub _init_shm
 
 sub run {
 
@@ -121,29 +146,33 @@ sub run {
 		next unless my $connected = $moq_socket->accept;
 		$this->speak("[$$] SMSTradeOutQ Something connected.");
 		while (1) {
+
+			unless ( defined( $this->shm ) ) {
+				$this->_init_shm();
+			}
+
 			# Here we will be read database
-			my $queue_msg = $this->_get_mo;
-			unless ( defined($queue_msg) ) {    # No more records
-				                                #sleep(500);
+			my $queue_msgs = $this->_get_mo;
+			my $count      = keys %$queue_msgs;
+
+			if ( $count == 0 ) {    # No more records
+				                    #sleep(500);
 				sleep(1);
 				next;
 			}
 
-			$queue_msg = $this->_validate_mo($queue_msg);
-
-			my $json_text = to_json( $queue_msg, { ascii => 1, pretty => 1 } );
-			# Sending to SMPPd
-			my $res = $connected->print( conv_str_base64($json_text) . "\n" );
-
-			# FIXME : дождаться подтверждения того, что сообщение послано.
-			# И только после этого удалить, иначе не удалять.
-
-			my $confirm = $connected->getline;
-			if ( $confirm =~ /OK/ ) {
-				$this->_delete_mo( $queue_msg->{'internal_id'} );
-			} else {
-				# FIXME : это не должен быть sleep.
-				sleep(1);
+			foreach my $msg ( keys %$queue_msgs ) {
+				my $queue_msg = $queue_msgs->{$msg};
+				$queue_msg = $this->_validate_mo($queue_msg);
+				my $json_text = to_json( $queue_msg, { ascii => 1, pretty => 1 } );
+				# Sending to SMPPd
+				my $res = $connected->print( conv_str_base64($json_text) . "\n" );
+				# FIXME : дождаться подтверждения того, что сообщение послано.
+				# И только после этого удалить, иначе не удалять.
+				my $confirm = $connected->getline;
+				if ( $confirm =~ /OK/ ) {
+					$this->_delete_mo( $queue_msg->{'internal_id'} );
+				}
 			}
 
 		} ## end while (1)
@@ -201,7 +230,7 @@ sub _connect_db {
 		last;
 	}
 
-	$this->msgsth( $this->msgdbh->prepare_cached("select id,msg_type,esme_id,src_addr,dst_addr,body,coding,message_id from messages where msg_type='MO' or msg_type='DLR';") );
+	# $this->msgsth( $this->msgdbh->prepare("select id,msg_type,esme_id,src_addr,dst_addr,body,coding,message_id from messages where msg_type='MO' or msg_type='DLR';") );
 
 } ## end sub _connect_db
 
@@ -211,13 +240,37 @@ sub _get_mo {
 
 	$this->_connect_db;
 
-	$this->msgsth->execute();
+	my $query = undef;
 
-	my $res = $this->msgsth->fetchrow_hashref;
+	unless ( defined( $this->shm ) ) {
+		#this->msgsth( $this->msgdbh->prepare("select id,msg_type,esme_id,src_addr,dst_addr,body,coding,message_id from messages where ( msg_type='MO' or msg_type='DLR');") );
+		#this->msgsth->execute();
+		$query = "select id,msg_type,esme_id,src_addr,dst_addr,body,coding,message_id from messages where msg_type='MO' or msg_type='DLR' order by id;";
+
+	} else {
+
+		# List active EMSEs
+		my $list  = decode_json( $this->shm->fetch );
+		my @esmes = ();
+		foreach my $login ( keys %$list ) {
+			push @esmes, $list->{$login};
+		}
+
+		my $count = @esmes;
+		if ( $count == 0 ) {
+			return {};
+		}
+
+		$list = join( ",", @esmes );
+		$query = "select id,msg_type,esme_id,src_addr,dst_addr,body,coding,message_id from messages where msg_type='MO' or msg_type='DLR' and esme_id in ($list) order by id";
+	}
+
+	#$this->msgsth->execute();
+	my $res = $this->msgdbh->selectall_hashref( $query, "id" );
 
 	return $res;
 
-}
+} ## end sub _get_mo
 
 1;
 

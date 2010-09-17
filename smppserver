@@ -253,8 +253,8 @@ sub _auth_esme {
 	$this->speak("[$$] Begin authentication for \"$login\"");
 
 	# Check DBMS connection and do reconnect if necessary
-	unless ( defined ( $this->_connect_db() ) ) { 
-		return undef; 
+	unless ( defined( $this->_connect_db() ) ) {
+		return undef;
 	}
 	# Execute SQL query (should be present in configuration file)
 	my $sth = $this->authdbh->prepare( $this->conf->{auth}->{query} );
@@ -267,7 +267,7 @@ sub _auth_esme {
 
 		unless ( defined( $ESME->{$system_id} ) ) {    # if this record does not exist in hasref ESME
 			$ESME->{$system_id} = $res;                # add it
-		}    # else, just check already exist hashref
+		}
 
 		unless ( defined( $ESME->{$system_id}->{'already_connected'} ) ) {    # no connections ?
 			$this->log( "info", "Setting already_connected to 0" );
@@ -276,23 +276,32 @@ sub _auth_esme {
 		}
 
 		# if database does not contain max_connections for ESME, default value = 1
-		unless ( defined( $ESME->{$system_id}->{'max_connections'} ) ) {
+		unless ( defined( $res->{'max_connections'} ) ) {
 			$ESME->{$system_id}->{'max_connections'} = 1;
 			$this->log( "warning", "Max_connections for " . $system_id . " is NULL. Default value set to 1. " );
 			$this->speak( "[$$] Max_connections for " . $system_id . " is NULL. Default value set to 1. " );
+		} else {
+			$ESME->{$system_id}->{'max_connections'} = $res->{'max_connections'};
 		}
+
 		# if database does not contain allowed_ip, set default to 0.0.0.0
-		unless ( defined( $ESME->{$system_id}->{'allowed_ip'} ) ) {
+		unless ( defined( $res->{'allowed_ip'} ) ) {
 			$ESME->{$system_id}->{'allowed_ip'} = '0.0.0.0';
 			$this->log( "warning", "Allowed src ip for " . $system_id . " is NULL. Default value set to 0.0.0.0 " );
 			$this->speak( "[$$] Allowed src ip for " . $system_id . " is NULL. Default value set to 0.0.0.0 " );
+		} else { 
+			$ESME->{$system_id}->{'allowed_ip'} = $res->{'allowed_ip'}; 
 		}
 
-		unless ( defined( $ESME->{$system_id}->{'bandwidth'} ) ) {
+
+		unless ( defined( $res->{'bandwidth'} ) ) {
 			$ESME->{$system_id}->{'bandwidth'} = 1;
 			$this->log( "warning", "Setting bandwidth for $system_id to 1/s" );
 			$this->speak("[$$] Setting bandwidth for $system_id to 1/s");
+		} else { 
+			$ESME->{$system_id}->{'bandwidth'} = $res->{'bandwidth'}; 
 		}
+
 
 	} else {
 
@@ -379,10 +388,10 @@ sub _connect_db {
 	if ( !$this->authdbh ) {
 		$this->speak("Cant connect to DBMS!");
 		$this->log( "error", "Cant connect to DBMS!" );
-		return undef; 
+		return undef;
 	}
 
-	return 1; 
+	return 1;
 
 } ## end sub _connect_db
 
@@ -617,7 +626,7 @@ sub _throttling {
 	}
 
 	if ( ( $ESME->{$login}->{'last_second_sm_received'} + 1 ) > $ESME->{$login}->{'bandwidth'} ) {
-		$this->log("warning","Deny send SMS from $login for THROTTLING reason.");
+		$this->log( "warning", "Deny send SMS from $login for THROTTLING reason." );
 		$this->speak("[$$] Deny send SMS from $login for THROTTLING reason.");
 		return undef;
 		# Deny
@@ -782,12 +791,12 @@ sub cmd_submit_sm {
 		if ( !$res ) {
 			$resp_status = 0x45;    # ESME_RSUBMITFAIL
 		}
-		my $confirm = $this->in_queue->getline; 
-		if ($confirm =~ /OK/ ) { 
+		my $confirm = $this->in_queue->getline;
+		if ( $confirm =~ /OK/ ) {
 			$resp_status = 0x00;
-		} else { 
-			$resp_status = 0x45; 
-		} 
+		} else {
+			$resp_status = 0x45;
+		}
 
 	} else {
 		$resp_status = 0x45;        # ESME_RSUBMITFAIL
@@ -816,11 +825,10 @@ sub cmd_unbind {
 		status => $pdu->{status},
 	);
 
-
 	my $login = $hdl->{system_id};
 
 	# Update SHM struture (only for defined system_id)
-	# If it was last connect 
+	# If it was last connect
 	if ( ( $hdl->{system_id} ) and ( $ESME->{$login}->{'already_connected'} == 1 ) ) {
 		$this->shm->lock;
 		my $list = decode_json( $this->shm->fetch );
@@ -836,7 +844,7 @@ sub cmd_unbind {
 	undef $this->{handlers}->{ $hdl->{id} };
 
 	# decrease already connected value for system_id
-	
+
 	$this->_decrease_already_connected( $hdl->{system_id} );
 
 }    # end sub cmd unbind
@@ -938,7 +946,7 @@ sub cmd_bind_transceiver {
 
 				# Update SHM struture
 				my $list = decode_json( $this->shm->fetch );
-				$list->{$login} = 1;
+				$list->{$login} = $ESME->{$login}->{'esme_id'};
 				$this->shm->lock;
 				$this->shm->store( encode_json($list) );
 				$this->shm->unlock;

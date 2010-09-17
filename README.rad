@@ -147,6 +147,17 @@ Monday 06.09.10 - Friday 10.09.10
 + THROTTLING works! 
 + new tool:smppdstat.pl shows connected ESME's
 
+Monday 13.09.10 - Friday 17.09.10 
+---------------------------------
++ Bugs fixed:
+* MySQL lost connection 
+* Other 
 
++ tests: 
+* kannel tests for throttling 
+* kannel tests as usual ESME 
+
++ Rewritten OutQ process
+* average speed up to 2000 sms per second 
 
 
