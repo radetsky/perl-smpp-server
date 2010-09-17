@@ -124,6 +124,11 @@ sub run {
 			chomp $recv_buf;
 			my $mt = from_json( conv_base64_str($recv_buf), { utf8 => 1 } );
 			my $res = $this->_put_mt($mt);
+			unless ( defined ( $res ) ) { 
+				$connected->print("ERROR\n"); # Message was not saved
+			} else {
+				$connected->print("OK\n"); # All OK
+			}
 		}
 		close $connected;
 	}
@@ -140,29 +145,40 @@ sub _put_mt {
 
 	my ( $this, $mt ) = @_;
 
-	$this->_connect_db;
+	unless ( defined( $this->_connect_db() ) ) {
+		return undef;
+	}
 
 	$mt = $this->_validate_mt($mt);
 
-	$this->msgsth->execute(
-		$mt->{'msg_type'},
-		$mt->{'esme_id'},
-		$mt->{'src_addr'},
-		$mt->{'dst_addr'},
-		$mt->{'body'},
-		$mt->{'coding'},
-		$mt->{'udh'},
-		$mt->{'mwi'},
-		$mt->{'mclass'},
-		$mt->{'message_id'},
-		$mt->{'validity'},
-		$mt->{'dereffed'},
-		$mt->{'registered_delivery'},
-		$mt->{'service_type'},
-		$mt->{'extra'},
-		$mt->{'received'},
+	unless (
+		defined(
+			$this->msgsth->execute(
+				$mt->{'msg_type'},
+				$mt->{'esme_id'},
+				$mt->{'src_addr'},
+				$mt->{'dst_addr'},
+				$mt->{'body'},
+				$mt->{'coding'},
+				$mt->{'udh'},
+				$mt->{'mwi'},
+				$mt->{'mclass'},
+				$mt->{'message_id'},
+				$mt->{'validity'},
+				$mt->{'dereffed'},
+				$mt->{'registered_delivery'},
+				$mt->{'service_type'},
+				$mt->{'extra'},
+				$mt->{'received'},
 
-	);
+			)
+		)
+	  )
+	{
+		return undef;
+	} ## end unless ( defined( $this->msgsth...
+
+	return 1;
 
 } ## end sub _put_mt
 
@@ -198,29 +214,26 @@ sub _connect_db {
 	my $user   = MYSQL_USER;
 	my $passwd = MYSQL_SECRET;
 
-	if ( defined ( $this->{conf}->{'in_queue'}->{'dsn'} ) ) { 
-		$dsn =  $this->{conf}->{'in_queue'}->{'dsn'}; 
-		$user =  $this->{conf}->{'in_queue'}->{'db-user'}; 
-		$passwd =  $this->{conf}->{'in_queue'}->{'db-password'};
-    } 
+	if ( defined( $this->{conf}->{'in_queue'}->{'dsn'} ) ) {
+		$dsn    = $this->{conf}->{'in_queue'}->{'dsn'};
+		$user   = $this->{conf}->{'in_queue'}->{'db-user'};
+		$passwd = $this->{conf}->{'in_queue'}->{'db-password'};
+	}
 
 	# If DBMS isn' t accessible - try reconnect
 
 	if ( !$this->msgdbh or !$this->msgdbh->ping ) {
 		$this->msgdbh( DBI->connect_cached( $dsn, $user, $passwd ) );
-	}
 
-	if ( !$this->msgdbh ) {
-		$this->speak("Cant connect to DBMS!");
-		$this->log( "error", "Cant connect to DBMS!" );
-		die;
-	}
-
-	if ( !$this->msgsth ) {
+		if ( !$this->msgdbh ) {
+			$this->speak("Cant connect to DBMS!");
+			$this->log( "error", "Cant connect to DBMS!" );
+			return undef;
+		}
 		my $sql = "insert into messages ( msg_type, esme_id, src_addr, dst_addr, body, coding, udh, mwi, mclass, message_id, validity, deferred, registered_delivery, service_type, extra, received ) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,? ) ";
-
 		$this->msgsth( $this->msgdbh->prepare_cached($sql) );
 	}
+	return 1;
 
 } ## end sub _connect_db
 

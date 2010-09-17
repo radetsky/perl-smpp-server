@@ -144,10 +144,9 @@ Monday 06.09.10 - Friday 10.09.10
 
 + ACL from allowed_ip works! tested manually. 
 + ACL from allowed_src works. Test No. 12 in testscript. 
++ THROTTLING works! 
++ new tool:smppdstat.pl shows connected ESME's
 
 
-
-
-Rad, take a look for new issues in redmine://Wiki  ;-) 
 
 

@@ -253,8 +253,9 @@ sub _auth_esme {
 	$this->speak("[$$] Begin authentication for \"$login\"");
 
 	# Check DBMS connection and do reconnect if necessary
-	$this->_connect_db();
-
+	unless ( defined ( $this->_connect_db() ) ) { 
+		return undef; 
+	}
 	# Execute SQL query (should be present in configuration file)
 	my $sth = $this->authdbh->prepare( $this->conf->{auth}->{query} );
 	$sth->execute( $login, $passwd );
@@ -378,7 +379,10 @@ sub _connect_db {
 	if ( !$this->authdbh ) {
 		$this->speak("Cant connect to DBMS!");
 		$this->log( "error", "Cant connect to DBMS!" );
+		return undef; 
 	}
+
+	return 1; 
 
 } ## end sub _connect_db
 
@@ -775,10 +779,15 @@ sub cmd_submit_sm {
 
 		# Sending to IN Queue
 		my $res = $this->in_queue->print( conv_str_base64($json_text) . "\n" );
-
 		if ( !$res ) {
 			$resp_status = 0x45;    # ESME_RSUBMITFAIL
 		}
+		my $confirm = $this->in_queue->getline; 
+		if ($confirm =~ /OK/ ) { 
+			$resp_status = 0x00;
+		} else { 
+			$resp_status = 0x45; 
+		} 
 
 	} else {
 		$resp_status = 0x45;        # ESME_RSUBMITFAIL

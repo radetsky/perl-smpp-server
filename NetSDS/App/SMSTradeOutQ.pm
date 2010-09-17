@@ -185,21 +185,23 @@ sub _connect_db {
 		$passwd = $this->{conf}->{'out_queue'}->{'db-password'};
 	}
 
-	# If DBMS isn' t accessible - try reconnect
+	while (1) {
+		# If DBMS isn' t accessible - try reconnect
 
-	if ( !$this->msgdbh or !$this->msgdbh->ping ) {
-		$this->msgdbh( DBI->connect_cached( $dsn, $user, $passwd ) );
+		if ( !$this->msgdbh or !$this->msgdbh->ping ) {
+			$this->msgdbh( DBI->connect_cached( $dsn, $user, $passwd ) );
+		}
+
+		if ( !$this->msgdbh ) {
+			$this->speak("Cant connect to DBMS! Waiting for 30 sec.");
+			$this->log( "error", "Cant connect to DBMS! Waiting for 30 sec." );
+			sleep(30);
+			next;
+		}
+		last;
 	}
 
-	if ( !$this->msgdbh ) {
-		$this->speak("Cant connect to DBMS!");
-		$this->log( "error", "Cant connect to DBMS!" );
-		die;
-	}
-
-	if ( !$this->msgsth ) {
-		$this->msgsth( $this->msgdbh->prepare_cached("select id,msg_type,esme_id,src_addr,dst_addr,body,coding,message_id from messages where msg_type='MO' or msg_type='DLR';") );
-	}
+	$this->msgsth( $this->msgdbh->prepare_cached("select id,msg_type,esme_id,src_addr,dst_addr,body,coding,message_id from messages where msg_type='MO' or msg_type='DLR';") );
 
 } ## end sub _connect_db
 

@@ -1,8 +1,8 @@
--- MySQL dump 10.13  Distrib 5.1.41, for debian-linux-gnu (i486)
+-- MySQL dump 10.11
 --
--- Host: localhost    Database: mydb
+-- Host: 192.168.1.53    Database: mydb
 -- ------------------------------------------------------
--- Server version	5.1.41-3ubuntu12.6
+-- Server version	5.0.51a
 
 /*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;
 /*!40101 SET @OLD_CHARACTER_SET_RESULTS=@@CHARACTER_SET_RESULTS */;
@@ -20,20 +20,20 @@
 --
 
 DROP TABLE IF EXISTS `auth_table`;
-/*!40101 SET @saved_cs_client     = @@character_set_client */;
-/*!40101 SET character_set_client = utf8 */;
+SET @saved_cs_client     = @@character_set_client;
+SET character_set_client = utf8;
 CREATE TABLE `auth_table` (
-  `esme_id` int(11) NOT NULL AUTO_INCREMENT,
-  `system_id` varchar(45) DEFAULT NULL,
-  `password` varchar(45) DEFAULT NULL,
-  `bandwidth` int(11) DEFAULT NULL,
-  `allowed_ip` varchar(256) DEFAULT NULL,
-  `allowed_src` varchar(256) DEFAULT NULL,
-  `max_connections` int(11) DEFAULT NULL,
-  `active` tinyint(1) DEFAULT NULL,
-  PRIMARY KEY (`esme_id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8 COMMENT='Table  for authorization of ESME''s';
-/*!40101 SET character_set_client = @saved_cs_client */;
+  `esme_id` int(11) NOT NULL auto_increment,
+  `system_id` varchar(45) default NULL,
+  `password` varchar(45) default NULL,
+  `bandwidth` int(11) default NULL,
+  `allowed_ip` varchar(256) default NULL,
+  `allowed_src` varchar(256) default NULL,
+  `max_connections` int(11) default NULL,
+  `active` tinyint(1) default NULL,
+  PRIMARY KEY  (`esme_id`)
+) ENGINE=InnoDB AUTO_INCREMENT=3 DEFAULT CHARSET=utf8 COMMENT='Table  for authorization of ESME''s';
+SET character_set_client = @saved_cs_client;
 
 --
 -- Dumping data for table `auth_table`
@@ -41,7 +41,7 @@ CREATE TABLE `auth_table` (
 
 LOCK TABLES `auth_table` WRITE;
 /*!40000 ALTER TABLE `auth_table` DISABLE KEYS */;
-INSERT INTO `auth_table` VALUES (1,'SMSGW','secret',NULL,NULL,NULL,NULL,1);
+INSERT INTO `auth_table` VALUES (1,'SMSGW','secret',1,'127.0.0.1','smppsvrtst.pl',NULL,1),(2,'test1000','secret1000',1000,NULL,NULL,1000,1);
 /*!40000 ALTER TABLE `auth_table` ENABLE KEYS */;
 UNLOCK TABLES;
 
@@ -50,30 +50,30 @@ UNLOCK TABLES;
 --
 
 DROP TABLE IF EXISTS `messages`;
-/*!40101 SET @saved_cs_client     = @@character_set_client */;
-/*!40101 SET character_set_client = utf8 */;
+SET @saved_cs_client     = @@character_set_client;
+SET character_set_client = utf8;
 CREATE TABLE `messages` (
-  `id` int(11) NOT NULL AUTO_INCREMENT,
-  `msg_type` varchar(3) DEFAULT NULL,
-  `esme_id` int(11) DEFAULT NULL,
-  `received` timestamp NOT NULL DEFAULT '0000-00-00 00:00:00',
-  `processed` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  `src_addr` varchar(32) DEFAULT NULL,
-  `dst_addr` varchar(32) DEFAULT NULL,
-  `body` varchar(512) DEFAULT NULL,
-  `coding` int(11) DEFAULT '0',
-  `udh` varchar(512) DEFAULT NULL,
-  `mwi` int(11) DEFAULT NULL,
-  `mclass` int(11) DEFAULT NULL,
-  `message_id` varchar(64) DEFAULT NULL,
-  `validity` int(11) DEFAULT '1440',
-  `deferred` int(11) DEFAULT '0',
-  `registered_delivery` int(11) DEFAULT '0',
-  `service_type` varchar(64) DEFAULT NULL,
-  `extra` varchar(512) DEFAULT NULL,
-  PRIMARY KEY (`id`)
-) ENGINE=MyISAM AUTO_INCREMENT=17089 DEFAULT CHARSET=utf8;
-/*!40101 SET character_set_client = @saved_cs_client */;
+  `id` int(11) NOT NULL auto_increment,
+  `msg_type` varchar(3) default NULL,
+  `esme_id` int(11) default NULL,
+  `received` timestamp NOT NULL default '0000-00-00 00:00:00',
+  `processed` timestamp NOT NULL default CURRENT_TIMESTAMP,
+  `src_addr` varchar(32) default NULL,
+  `dst_addr` varchar(32) default NULL,
+  `body` varchar(512) default NULL,
+  `coding` int(11) default '0',
+  `udh` varchar(512) default NULL,
+  `mwi` int(11) default NULL,
+  `mclass` int(11) default NULL,
+  `message_id` varchar(64) default NULL,
+  `validity` int(11) default '1440',
+  `deferred` int(11) default '0',
+  `registered_delivery` int(11) default '0',
+  `service_type` varchar(64) default NULL,
+  `extra` varchar(512) default NULL,
+  PRIMARY KEY  (`id`)
+) ENGINE=MyISAM AUTO_INCREMENT=67236 DEFAULT CHARSET=utf8;
+SET character_set_client = @saved_cs_client;
 
 --
 -- Dumping data for table `messages`
@@ -93,4 +93,4 @@ UNLOCK TABLES;
 /*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
--- Dump completed on 2010-09-01 13:26:24
+-- Dump completed on 2010-09-10 19:19:26
