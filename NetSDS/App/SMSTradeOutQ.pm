@@ -174,6 +174,7 @@ sub run {
 					$this->_delete_mo( $queue_msg->{'internal_id'} );
 				}
 			}
+			sleep(1);
 
 		} ## end while (1)
 		close $connected;
@@ -241,32 +242,34 @@ sub _get_mo {
 	$this->_connect_db;
 
 	my $query = undef;
+	my $res   = {};
 
 	unless ( defined( $this->shm ) ) {
-		#this->msgsth( $this->msgdbh->prepare("select id,msg_type,esme_id,src_addr,dst_addr,body,coding,message_id from messages where ( msg_type='MO' or msg_type='DLR');") );
-		#this->msgsth->execute();
-		$query = "select id,msg_type,esme_id,src_addr,dst_addr,body,coding,message_id from messages where msg_type='MO' or msg_type='DLR' order by id;";
-
+		return {};
 	} else {
 
 		# List active EMSEs
 		my $list  = decode_json( $this->shm->fetch );
-		my @esmes = ();
-		foreach my $login ( keys %$list ) {
-			push @esmes, $list->{$login};
-		}
+		my $count = keys %$list;
 
-		my $count = @esmes;
 		if ( $count == 0 ) {
 			return {};
 		}
 
-		$list = join( ",", @esmes );
-		$query = "select id,msg_type,esme_id,src_addr,dst_addr,body,coding,message_id from messages where msg_type='MO' or msg_type='DLR' and esme_id in ($list) order by id";
-	}
+		foreach my $login ( keys %$list ) {
+			my $mode      = $list->{$login}->{'mode'};
+			my $bandwidth = $list->{$login}->{'bandwidth'};
+			my $esme_id   = $list->{$login}->{'esme_id'};
 
-	#$this->msgsth->execute();
-	my $res = $this->msgdbh->selectall_hashref( $query, "id" );
+			if ( ( $mode eq 'transciever' ) or ( $mode eq 'receiver' ) ) {
+				$query = "select id,msg_type,esme_id,src_addr,dst_addr,body,coding,message_id from messages where msg_type='MO' or msg_type='DLR' and esme_id = $esme_id order by id limit $bandwidth";
+				$this->log("debug",$query);
+				my $res_esme = $this->msgdbh->selectall_hashref( $query, "id" );
+				$res = { %$res, %$res_esme };
+			}
+		}
+
+	} ## end else
 
 	return $res;
 

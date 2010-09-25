@@ -160,4 +160,19 @@ Monday 13.09.10 - Friday 17.09.10
 + Rewritten OutQ process
 * average speed up to 2000 sms per second 
 
+Monday 20.09.10 - Friday 24.09.10 
+---------------------------------
++ Shared memory updated more complex structure: 
+  1. esme_id
+	2. connected mode 
++ Submit fail from receiver
++ Deliver fail to transmitter 
++ Event Detail Recording for next events: 
+* Start Server
+* Bind Receiver, Transmitter, Transciever 
+* Unbind 
+* Submit 
+* Deliver 
++ Bandwidth works in two ways 
+
 

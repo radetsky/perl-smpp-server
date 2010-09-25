@@ -29,6 +29,7 @@ SMPPServerV2->run(
 	use_pidfile => 1,
 	has_conf    => 1,
 	conf_file   => "./smppserver.conf",
+	edr_file    => "./log/events.log",
 	debug       => 1
 );
 
@@ -196,6 +197,19 @@ sub initialize {
 
 } ## end sub initialize
 
+sub _edr_write {
+	my ( $this, $params ) = @_;
+
+	unless ( defined( $this->edr_file ) ) {
+		return undef;
+	}
+
+	$params->{'timestamp'} = date_now();
+
+	$this->{edr_writer}->write($params);
+
+}
+
 sub _burn_children {
 
 	my ( $this, %params ) = @_;
@@ -237,6 +251,7 @@ sub start {
 	my ($this) = @_;
 
 	$this->speak("[$$] Start SMPPServerV2 ");
+	$this->_edr_write( { Event => 'Start Server' } );
 
 	# Connect to authentication DBMS
 	$this->mk_accessors('authdbh');
@@ -289,22 +304,35 @@ sub _auth_esme {
 			$ESME->{$system_id}->{'allowed_ip'} = '0.0.0.0';
 			$this->log( "warning", "Allowed src ip for " . $system_id . " is NULL. Default value set to 0.0.0.0 " );
 			$this->speak( "[$$] Allowed src ip for " . $system_id . " is NULL. Default value set to 0.0.0.0 " );
-		} else { 
-			$ESME->{$system_id}->{'allowed_ip'} = $res->{'allowed_ip'}; 
+		} else {
+			$ESME->{$system_id}->{'allowed_ip'} = $res->{'allowed_ip'};
 		}
-
 
 		unless ( defined( $res->{'bandwidth'} ) ) {
 			$ESME->{$system_id}->{'bandwidth'} = 1;
 			$this->log( "warning", "Setting bandwidth for $system_id to 1/s" );
 			$this->speak("[$$] Setting bandwidth for $system_id to 1/s");
-		} else { 
-			$ESME->{$system_id}->{'bandwidth'} = $res->{'bandwidth'}; 
+		} else {
+			$ESME->{$system_id}->{'bandwidth'} = $res->{'bandwidth'};
 		}
 
+		$this->_edr_write(
+			{
+				Event  => 'Authentication',
+				ESME   => $system_id,
+				Status => 'OK',
+			}
+		);
 
 	} else {
 
+		$this->_edr_write(
+			{
+				Event  => 'Authentication',
+				ESME   => $login,
+				Status => 'FAIL'
+			}
+		);
 		return undef;
 
 	}
@@ -655,8 +683,14 @@ sub cmd_submit_sm {
 	my $resp_status = undef;          # response command status
 	my $message_id  = make_uuid();    # message id on CPA (UUID style)
 
+	my $list = decode_json( $this->shm->fetch );
+	my $mode = $list->{ $hdl->{system_id} }->{'mode'};
+
 	# Check if client is authenticated
-	if ( ( $hdl->{authenticated} ) and ( $this->_authorize_submit( $pdu, $hdl ) ) ) {
+	if (    ( $hdl->{authenticated} )
+		and ( $this->_authorize_submit( $pdu, $hdl ) )
+		and ( $mode ne 'receiver' ) )
+	{
 
 		# Throttling ?
 
@@ -797,11 +831,38 @@ sub cmd_submit_sm {
 		} else {
 			$resp_status = 0x45;
 		}
-
 	} else {
 		$resp_status = 0x45;        # ESME_RSUBMITFAIL
 	}
 
+	if ( $resp_status != 0x00 ) {
+
+		$this->speak( "[$$] Submit fail from '" . $pdu->{source_addr} . "' to '" . $pdu->{destination_addr} . "' via '" . $hdl->{system_id} . "'" );
+		$this->log( "warning", "Submit fail from '" . $pdu->{source_addr} . "' to '" . $pdu->{destination_addr} . "' via '" . $hdl->{system_id} . "'" );
+
+		$this->_edr_write(
+			{
+				Event          => 'Submit',
+				ESME           => $hdl->{system_id},
+				Status         => 'FAIL',
+				ResponseStatus => $resp_status
+			}
+		);
+
+	}
+
+	if ( $resp_status == 0x00 ) {
+
+		$this->_edr_write(
+			{
+				Event          => 'Submit',
+				ESME           => $hdl->{system_id},
+				Status         => 'OK',
+				ResponseStatus => $resp_status
+			}
+		);
+
+	}
 	# Send response to ESME
 	# Note: we use asynchronous sending to avoid deadlocks
 	$hdl->{smpp}->submit_sm_resp(
@@ -846,6 +907,13 @@ sub cmd_unbind {
 	# decrease already connected value for system_id
 
 	$this->_decrease_already_connected( $hdl->{system_id} );
+
+	$this->_edr_write(
+		{
+			Event => 'Unbind',
+			ESME  => $hdl->{system_id}
+		}
+	);
 
 }    # end sub cmd unbind
 
@@ -946,7 +1014,11 @@ sub cmd_bind_transceiver {
 
 				# Update SHM struture
 				my $list = decode_json( $this->shm->fetch );
-				$list->{$login} = $ESME->{$login}->{'esme_id'};
+
+				$list->{$login}->{'esme_id'} = $ESME->{$login}->{'esme_id'};
+				$list->{$login}->{'mode'}    = 'transciever';
+				$list->{$login}->{'bandwidth'} = $ESME->{$login}->{'bandwidth'}; 
+
 				$this->shm->lock;
 				$this->shm->store( encode_json($list) );
 				$this->shm->unlock;
@@ -975,6 +1047,24 @@ sub cmd_bind_transceiver {
 
 		} ## end else [ if ( $this->_auth_esme...
 	} ## end else [ if ( $hdl->{authenticated...
+
+	my $status = undef;
+
+	if ( $resp_status == 0x00 ) {
+		$status = 'OK';
+	} else {
+		$status = 'FAIL';
+	}
+
+	$this->_edr_write(
+		{
+			Event      => 'Bind Transciever',
+			ESME       => $login,
+			Status     => $status,
+			RespStatus => $resp_status
+
+		}
+	);
 
 	my $resp = $hdl->{smpp}->bind_transceiver_resp(
 		seq       => $pdu->{seq},
@@ -1022,7 +1112,11 @@ sub cmd_bind_transmitter {
 
 				# Update SHM struture
 				my $list = decode_json( $this->shm->fetch );
-				$list->{$login} = 1;
+
+				$list->{$login}->{'esme_id'} = $ESME->{$login}->{'esme_id'};
+				$list->{$login}->{'mode'}    = 'transmitter';
+				$list->{$login}->{'bandwidth'} = $ESME->{$login}->{'bandwidth'}; 
+
 				$this->shm->lock;
 				$this->shm->store( encode_json($list) );
 				$this->shm->unlock;
@@ -1048,6 +1142,22 @@ sub cmd_bind_transmitter {
 
 		}
 	} ## end else [ if ( $hdl->{authenticated...
+
+	my $status = undef;
+	if ( $resp_status == 0x00 ) {
+		$status = 'OK';
+	} else {
+		$status = 'FAIL';
+	}
+	$this->_edr_write(
+		{
+			Event      => 'Bind Transmitter',
+			ESME       => $login,
+			Status     => $status,
+			RespStatus => $resp_status
+
+		}
+	);
 
 	my $resp = $hdl->{smpp}->bind_transmitter_resp(
 		seq       => $pdu->{seq},
@@ -1094,7 +1204,11 @@ sub cmd_bind_receiver {
 
 				# Update SHM struture
 				my $list = decode_json( $this->shm->fetch );
-				$list->{$login} = 1;
+
+				$list->{$login}->{'esme_id'} = $ESME->{$login}->{'esme_id'};
+				$list->{$login}->{'mode'}    = 'receiver';
+				$list->{$login}->{'bandwidth'} = $ESME->{$login}->{'bandwidth'}; 
+
 				$this->shm->lock;
 				$this->shm->store( encode_json($list) );
 				$this->shm->unlock;
@@ -1122,6 +1236,21 @@ sub cmd_bind_receiver {
 
 		} ## end else [ if ( $this->_auth_esme...
 	} ## end else [ if ( $hdl->{authenticated...
+
+	my $status = undef;
+	if ( $resp_status == 0x00 ) {
+		$status = 'OK';
+	} else {
+		$status = 'FAIL';
+	}
+	$this->_edr_write(
+		{
+			Event      => 'Bind Receiver',
+			ESME       => $login,
+			Status     => $status,
+			RespStatus => $resp_status
+		}
+	);
 
 	my $resp = $hdl->{smpp}->bind_receiver_resp(
 		seq       => $pdu->{seq},
@@ -1209,6 +1338,10 @@ sub _deliver_sm {
 			$esm_class = 0x04;    # DLR
 		}
 
+		my $system_id = $hdl->{system_id};
+		$this->speak("[$$] Deliver SM from '$source_addr' to '$destination_addr' via '$system_id' ");
+		$this->log( "info", "Deliver SM from '$source_addr' to '$destination_addr' via '$system_id'" );
+
 		# Send deliver_sm
 		$hdl->{smpp}->deliver_sm(
 			source_addr_ton  => $source_addr_ton,    # International (MSISDN)
@@ -1226,6 +1359,15 @@ sub _deliver_sm {
 	} ## end if ( $mo->{id} )
 
 	$hdl->{out_seq}++;
+
+	$this->_edr_write(
+		{
+			Event  => 'Deliver',
+			ESME   => $hdl->{system_id},
+			Status => 'OK'
+		}
+	);
+
 } ## end sub _deliver_sm
 
 sub _process_socket {

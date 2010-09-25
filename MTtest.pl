@@ -70,6 +70,30 @@ $seq = $cli->unbind();
 $pdu = $cli->read_pdu();
 
 
+$cli = Net::SMPP->new_connect( 'localhost', port => 9900, smpp_version => 0x34, async => 1 ) or die;
+$seq = $cli->bind_receiver( system_id => 'SMSGW', password => 'secret' ) or die;
+$pdu = $cli->read_pdu() or die;
+if ( $pdu->{status} == 0x00 ) {          ## STATUS
+	print "ok 3: correct answer for system_id->'SMSGW',password->'secret'. \n";
+} else {
+	die "fail 3: PDU->status must have 0x00 value. \n";
+}
+
+$seq = $cli->submit_sm( 'data_coding' => '2', 'source_addr' => 'smppsvrtst.pl', 'destination_addr' => '380504139380', short_message => 'Test message from smppsvrtst.pl' ) or die;
+$pdu = $cli->read_pdu() or die;
+if ( $pdu->{status} != 0x00 ) {          ## STATUS
+	print "ok 4: SM fail from mode receiver.\n";
+} else {
+	die "fail 4: single message was acccepted. \n";
+}
+
+$seq = $cli->unbind(); 
+$pdu = $cli->read_pdu();
+
+
+
+
+
 #############################################################################
 
 ### The end
