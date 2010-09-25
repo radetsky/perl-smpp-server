@@ -102,10 +102,6 @@ for (my $cx = 0; $cx < 1000; $cx++ ) {
 }
 
 
-# unbind and close 
-$cli3->unbind() or die; 
-
-
 my $elapsed = tv_interval ( $t0, [ gettimeofday ] );
 my $smspersec = 1000/$elapsed;
 print "ok 5: 1000 SMS per $elapsed seconds ~~ $smspersec \n";
@@ -127,7 +123,7 @@ print "ok 6: receive SM\n";
 
 $t0 = [ gettimeofday ];
 for (my $cx = 0; $cx < 1000; $cx++ ) {
-	$sth->execute( 'MO',1,'0504139380','smppsvrtst.pl',conv_str_hex('bla-bla-bla'),0,undef,undef,undef,'1010101010101010101',1440,undef,undef,undef,undef,'2010-08-30 23:59:00');
+	$sth->execute( 'MO',2,'0504139380','smppsvrtst.pl',conv_str_hex('bla-bla-bla'),0,undef,undef,undef,'1010101010101010101',1440,undef,undef,undef,undef,'2010-08-30 23:59:00');
 };
 
 $elapsed = tv_interval ( $t0, [ gettimeofday ] );
@@ -138,11 +134,13 @@ print "ok 7: inserted 1000 SMS per $elapsed seconds ~~ $smspersec \n";
 
 $t0 = [ gettimeofday ];
 for (my $cx = 0; $cx < 1000; $cx++) {
-	$pdu = $cli->read_pdu();
+	$pdu = $cli3->read_pdu();
 }
 $elapsed = tv_interval ( $t0, [ gettimeofday ] );
 $smspersec = 1000/$elapsed;
 print "ok 8: received 1000 SMS per $elapsed seconds ~~ $smspersec \n";
+
+$cli3->unbind();
 
 # Test No 9. Sending enquire-lik 
 

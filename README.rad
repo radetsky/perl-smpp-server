@@ -166,8 +166,9 @@ Monday 20.09.10 - Friday 24.09.10
   1. esme_id
 	2. connected mode 
 + Submit fail from receiver
-+ Deliver fail to transmitter 
-+ Event Detail Recording for next events: 
++ Deliver fail to transmitter
+
++ Event Detail Recording for next events (default log/events.log);
 * Start Server
 * Bind Receiver, Transmitter, Transciever 
 * Unbind 
