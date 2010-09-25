@@ -257,7 +257,16 @@ sub start {
 	$this->mk_accessors('authdbh');
 	$this->_connect_db;
 
-}
+	# Do you understand what written here ? Yes:No;
+	my $my_local_data = defined( $this->conf->{'shm'}->{'magickey'} ) ? $this->conf->{'shm'}->{'magickey'} : 'My L0c4l D4t4';
+
+	$this->shm->lock;
+	my $list = decode_json( $this->shm->fetch );
+	$list->{$my_local_data}->{'start_timestamp'} = time;
+	$this->shm->store( encode_json($list) );
+	$this->shm->unlock;
+
+} ## end sub start
 
 sub _auth_esme {
 
@@ -1015,9 +1024,9 @@ sub cmd_bind_transceiver {
 				# Update SHM struture
 				my $list = decode_json( $this->shm->fetch );
 
-				$list->{$login}->{'esme_id'} = $ESME->{$login}->{'esme_id'};
-				$list->{$login}->{'mode'}    = 'transciever';
-				$list->{$login}->{'bandwidth'} = $ESME->{$login}->{'bandwidth'}; 
+				$list->{$login}->{'esme_id'}   = $ESME->{$login}->{'esme_id'};
+				$list->{$login}->{'mode'}      = 'transciever';
+				$list->{$login}->{'bandwidth'} = $ESME->{$login}->{'bandwidth'};
 
 				$this->shm->lock;
 				$this->shm->store( encode_json($list) );
@@ -1113,9 +1122,9 @@ sub cmd_bind_transmitter {
 				# Update SHM struture
 				my $list = decode_json( $this->shm->fetch );
 
-				$list->{$login}->{'esme_id'} = $ESME->{$login}->{'esme_id'};
-				$list->{$login}->{'mode'}    = 'transmitter';
-				$list->{$login}->{'bandwidth'} = $ESME->{$login}->{'bandwidth'}; 
+				$list->{$login}->{'esme_id'}   = $ESME->{$login}->{'esme_id'};
+				$list->{$login}->{'mode'}      = 'transmitter';
+				$list->{$login}->{'bandwidth'} = $ESME->{$login}->{'bandwidth'};
 
 				$this->shm->lock;
 				$this->shm->store( encode_json($list) );
@@ -1205,9 +1214,9 @@ sub cmd_bind_receiver {
 				# Update SHM struture
 				my $list = decode_json( $this->shm->fetch );
 
-				$list->{$login}->{'esme_id'} = $ESME->{$login}->{'esme_id'};
-				$list->{$login}->{'mode'}    = 'receiver';
-				$list->{$login}->{'bandwidth'} = $ESME->{$login}->{'bandwidth'}; 
+				$list->{$login}->{'esme_id'}   = $ESME->{$login}->{'esme_id'};
+				$list->{$login}->{'mode'}      = 'receiver';
+				$list->{$login}->{'bandwidth'} = $ESME->{$login}->{'bandwidth'};
 
 				$this->shm->lock;
 				$this->shm->store( encode_json($list) );

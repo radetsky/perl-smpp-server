@@ -42,7 +42,9 @@ use base qw(NetSDS::App);
 
 use IPC::ShareLite;
 use JSON;
-use Data::Dumper; 
+use Data::Dumper;
+
+use NetSDS::Util::DateTime;
 
 sub run {
 
@@ -52,10 +54,57 @@ sub run {
 		-key     => 1987,
 		-create  => 'no',
 		-destroy => 'no'
-	) or die ("Can't access to shared memory with segment 1987: $!\n"); 
+	  )
+	  or die("Can't access to shared memory with segment 1987: $!\n");
 
-    my $list = decode_json ( $share->fetch ); 
-    warn Dumper ($list); 
+	my $list          = decode_json( $share->fetch );
+#	warn Dumper($list);
+
+#	my $my_local_data = defined( $this->conf->{'shm'}->{'magickey'} ) ? $this->conf->{'shm'}->{'magickey'} : 'My L0c4l D4t4';
+    my $my_local_data = 'My L0c4l D4t4';
+#	warn Dumper ($my_local_data);
+
+	# Show start and uptime
+	my $start_time             = $list->{$my_local_data}->{'start_timestamp'};
+#	warn Dumper ($start_time);
+
+	my $str_start_time = localtime($start_time);
+#	warn Dumper ($str_start_time);
+
+	my $timediff               = time() - $start_time;
+	my $str_uptime = $this->_uptime($timediff);
+	printf("Start time: %s\nUptime: %s\n",$str_start_time,$str_uptime); 
+
+	printf("Connected list: \n");
+	printf("  SYSTEM_ID  |    MODE    | BANDWIDTH |   SENT   | RECEIVED \n");
+	foreach my $login ( keys %$list) {
+		if ($login eq $my_local_data) { next; }
+
+		printf("%13s|%12s|%11s|%10d|%10d\n",
+			$login,
+			$list->{$login}->{'mode'},
+			$list->{$login}->{'bandwidth'},
+			0,0); 
+
+	}
+
+} ## end sub run
+
+sub _uptime {
+	my ( $this, $timediff ) = @_;
+
+	my $days    = int( $timediff / 86400 );
+	my $hours   = int( ( $timediff - ( $days * 86400 ) ) / 3600 );
+	my $minutes = int( ( $timediff - ( $days * 86400 ) - ( $hours * 3600 ) ) / 60 );
+	my $seconds = $timediff % 60;
+
+	return sprintf(
+		"%d days %d hours %d minutes %d seconds\n",
+		$days,
+		$hours,
+		$minutes,
+		$seconds
+	);
 
 }
 

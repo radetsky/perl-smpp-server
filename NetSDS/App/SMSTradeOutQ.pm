@@ -250,20 +250,21 @@ sub _get_mo {
 
 		# List active EMSEs
 		my $list  = decode_json( $this->shm->fetch );
-		my $count = keys %$list;
-
-		if ( $count == 0 ) {
-			return {};
-		}
+		my $my_local_data = defined( $this->conf->{'shm'}->{'magickey'} ) ? $this->conf->{'shm'}->{'magickey'} : 'My L0c4l D4t4';
+		
 
 		foreach my $login ( keys %$list ) {
+			if ($login eq $my_local_data) { 
+				next;
+			}
+
 			my $mode      = $list->{$login}->{'mode'};
 			my $bandwidth = $list->{$login}->{'bandwidth'};
 			my $esme_id   = $list->{$login}->{'esme_id'};
 
 			if ( ( $mode eq 'transciever' ) or ( $mode eq 'receiver' ) ) {
 				$query = "select id,msg_type,esme_id,src_addr,dst_addr,body,coding,message_id from messages where msg_type='MO' or msg_type='DLR' and esme_id = $esme_id order by id limit $bandwidth";
-				$this->log("debug",$query);
+				#$this->log("debug",$query);
 				my $res_esme = $this->msgdbh->selectall_hashref( $query, "id" );
 				$res = { %$res, %$res_esme };
 			}
