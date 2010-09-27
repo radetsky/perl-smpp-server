@@ -175,5 +175,6 @@ Monday 20.09.10 - Friday 24.09.10
 * Submit 
 * Deliver 
 + Bandwidth works in two ways 
++ smppdstat.pl shows startime, uptime, list of connected ESME. 
 
 
