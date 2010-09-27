@@ -325,6 +325,14 @@ sub _auth_esme {
 			$ESME->{$system_id}->{'bandwidth'} = $res->{'bandwidth'};
 		}
 
+		unless ( defined( $ESME->{$system_id}->{'received'} ) ) {
+			$ESME->{$system_id}->{'received'} = 0;
+		}
+
+		unless ( defined( $ESME->{$system_id}->{'sent'} ) ) {
+			$ESME->{$system_id}->{'sent'} = 0;
+		}
+
 		$this->_edr_write(
 			{
 				Event  => 'Authentication',
@@ -346,6 +354,43 @@ sub _auth_esme {
 
 	}
 } ## end sub _auth_esme
+
+=item B<_increase_received> 
+
+Increase received messages value 
+
+=cut 
+
+sub _increase_received {
+	my ( $this, $login ) = @_;
+
+	$ESME->{$login}->{'received'} = $ESME->{$login}->{'received'} + 1;
+
+	$this->shm->lock;
+	my $list = decode_json( $this->shm->fetch );
+	$list->{$login}->{'received'} = $ESME->{$login}->{'received'};
+	$this->shm->store( encode_json($list) );
+	$this->shm->unlock;
+
+}
+
+=item B<_increase_sent> 
+
+Increase sent messages value 
+
+=cut 
+
+sub _increase_sent {
+	my ( $this, $login ) = @_;
+
+	$ESME->{$login}->{'sent'} = $ESME->{$login}->{'sent'} + 1;
+	$this->shm->lock;
+	my $list = decode_json( $this->shm->fetch );
+	$list->{$login}->{'sent'} = $ESME->{$login}->{'sent'};
+	$this->shm->store( encode_json($list) );
+	$this->shm->unlock;
+
+}
 
 =item B<_increase_already_connected> 
 
@@ -870,6 +915,7 @@ sub cmd_submit_sm {
 				ResponseStatus => $resp_status
 			}
 		);
+		$this->_increase_received( $hdl->{system_id} );
 
 	}
 	# Send response to ESME
@@ -895,27 +941,34 @@ sub cmd_unbind {
 		status => $pdu->{status},
 	);
 
-	my $login = $hdl->{system_id};
+	# decrease already connected value for system_id
+	$this->_decrease_already_connected( $hdl->{system_id} );
 
 	# Update SHM struture (only for defined system_id)
-	# If it was last connect
-	if ( ( $hdl->{system_id} ) and ( $ESME->{$login}->{'already_connected'} == 1 ) ) {
-		$this->shm->lock;
-		my $list = decode_json( $this->shm->fetch );
-		delete $list->{ $hdl->{system_id} };
-		$this->shm->store( encode_json($list) );
-		$this->shm->unlock;
+	if ( $hdl->{system_id} ) {
+		if ( $ESME->{$system_id}->{'already_connected'} <= 0 ) {
+			# If it was last connect, remove ESME from SHM
+			$this->shm->lock;
+			my $list = decode_json( $this->shm->fetch );
+			delete $list->{ $hdl->{system_id} };
+			$this->shm->store( encode_json($list) );
+			$this->shm->unlock;
+		} else {
+			# ELSE Just decrease already_connected value in SHM
+			$this->shm->lock;
+			my $list = decode_json( $this->shm->fetch );
+			$list->{$system_id}->{'already_connected'} = $ESME->{$system_id}->{'already_connected'};
+			$this->shm->store( encode_json($list) );
+			$this->shm->unlock;
+		}
 	}
+
 	# Remove socket from select()
 	$this->selector->remove( $hdl->{smpp} );
 
 	# Close socket and remove record
 	$hdl->{smpp}->close();
 	undef $this->{handlers}->{ $hdl->{id} };
-
-	# decrease already connected value for system_id
-
-	$this->_decrease_already_connected( $hdl->{system_id} );
 
 	$this->_edr_write(
 		{
@@ -1024,14 +1077,17 @@ sub cmd_bind_transceiver {
 				# Update SHM struture
 				my $list = decode_json( $this->shm->fetch );
 
-				$list->{$login}->{'esme_id'}   = $ESME->{$login}->{'esme_id'};
-				$list->{$login}->{'mode'}      = 'transciever';
-				$list->{$login}->{'bandwidth'} = $ESME->{$login}->{'bandwidth'};
+				$list->{$login}->{'esme_id'}           = $ESME->{$login}->{'esme_id'};
+				$list->{$login}->{'mode'}              = 'transciever';
+				$list->{$login}->{'bandwidth'}         = $ESME->{$login}->{'bandwidth'};
+				$list->{$login}->{'already_connected'} = $ESME->{$login}->{'already_connected'};
+				$list->{$login}->{'sent'}              = $ESME->{$login}->{'sent'};
+				$list->{$login}->{'received'}          = $ESME->{$login}->{'received'};
 
 				$this->shm->lock;
 				$this->shm->store( encode_json($list) );
 				$this->shm->unlock;
-			}
+			} ## end if ( $resp_status == 0x00)
 
 		} else {
 			$this->log( "warning", "Cant authenticate ESME: [$login:$passwd]" );
@@ -1122,15 +1178,19 @@ sub cmd_bind_transmitter {
 				# Update SHM struture
 				my $list = decode_json( $this->shm->fetch );
 
-				$list->{$login}->{'esme_id'}   = $ESME->{$login}->{'esme_id'};
-				$list->{$login}->{'mode'}      = 'transmitter';
-				$list->{$login}->{'bandwidth'} = $ESME->{$login}->{'bandwidth'};
+				$list->{$login}->{'esme_id'}           = $ESME->{$login}->{'esme_id'};
+				$list->{$login}->{'mode'}              = 'transmitter';
+				$list->{$login}->{'bandwidth'}         = $ESME->{$login}->{'bandwidth'};
+				$list->{$login}->{'already_connected'} = $ESME->{$login}->{'already_connected'};
+				$list->{$login}->{'sent'}              = $ESME->{$login}->{'sent'};
+				$list->{$login}->{'received'}          = $ESME->{$login}->{'received'};
+
 
 				$this->shm->lock;
 				$this->shm->store( encode_json($list) );
 				$this->shm->unlock;
 
-			}
+			} ## end if ( $resp_status == 0x00)
 
 		} else {
 			$this->log( "warning", "Cant authenticate ESME: [$login:$passwd]" );
@@ -1214,9 +1274,13 @@ sub cmd_bind_receiver {
 				# Update SHM struture
 				my $list = decode_json( $this->shm->fetch );
 
-				$list->{$login}->{'esme_id'}   = $ESME->{$login}->{'esme_id'};
-				$list->{$login}->{'mode'}      = 'receiver';
-				$list->{$login}->{'bandwidth'} = $ESME->{$login}->{'bandwidth'};
+				$list->{$login}->{'esme_id'}           = $ESME->{$login}->{'esme_id'};
+				$list->{$login}->{'mode'}              = 'receiver';
+				$list->{$login}->{'bandwidth'}         = $ESME->{$login}->{'bandwidth'};
+				$list->{$login}->{'already_connected'} = $ESME->{$login}->{'already_connected'};
+				$list->{$login}->{'sent'}              = $ESME->{$login}->{'sent'};
+				$list->{$login}->{'received'}          = $ESME->{$login}->{'received'};
+
 
 				$this->shm->lock;
 				$this->shm->store( encode_json($list) );
@@ -1284,7 +1348,6 @@ sub _process_out_queue {
 		# FIXME - provide incorrect data handling
 		my $mo = decode_json( conv_base64_str($line) );
 
-		use Data::Dumper;
 		# Check if exist in MO esme_id
 		unless ( defined( $mo->{'esme_id'} ) ) {
 			$this->speak("[$$] MO with empty esme_id");
@@ -1298,25 +1361,32 @@ sub _process_out_queue {
 					last;
 				}
 			}
-			# Looking for proper ESME connect
 
-			my $esme_connect_found = undef;
+			# Looking for proper ESME connect
+			my $esme_connect_found = 0;
+			my @esme_connects      = ();
+
 			foreach my $hdl ( values %{ $this->handlers } ) {
-				#warn "[$$] hdl ". Dumper ($hdl);
 				unless ( defined( $hdl->{system_id} ) ) { next; }
 				if ( $hdl->{system_id} eq $mo->{'system_id'} ) {
 					if ( ( $hdl->{mode} eq 'transceiver' ) or ( $hdl->{mode} eq 'receiver' ) ) {
-						# warn "[$$] Call _deliver_sm with MO: ". Dumper ($mo);
-						$this->_deliver_sm( $hdl, $mo );    # send deliver_sm to ESME
-						$this->out_queue->print("OK\n");
-						$esme_connect_found = 1;
+						# Found connect. Push IT.
+						push @esme_connects, $hdl;
+						$esme_connect_found = $esme_connect_found + 1;
 					}
 				}
 			}
-			unless ( defined($esme_connect_found) ) {
+
+			if ( $esme_connect_found <= 0 ) {
 				$this->speak( "[$$] ESME " . $mo->{'system_id'} . "not found in active list. " );
 				$this->log( "warning", "ESME " . $mo->{'system_id'} . "not found in active list. " );
 				$this->out_queue->print("ERROR\n");
+			} else {
+				my $hdl_index = rand($esme_connect_found);    # Select random connect
+				my $hdl       = $esme_connects[$hdl_index];
+				$this->_deliver_sm( $hdl, $mo );              # send deliver_sm to ESME
+				$this->out_queue->print("OK\n");
+
 			}
 
 		} ## end else
@@ -1377,6 +1447,8 @@ sub _deliver_sm {
 		}
 	);
 
+	$this->_increase_sent( $hdl->{system_id} );
+
 } ## end sub _deliver_sm
 
 sub _process_socket {
@@ -1409,19 +1481,26 @@ sub _process_socket {
 
 			my $login = $hdl->{system_id};
 			# Update SHM struture (only for defined system_id)
-			if ( ( $hdl->{system_id} ) and ( $ESME->{$login}->{'already_connected'} == 0 ) ) {
-				$this->shm->lock;
-				my $list = decode_json( $this->shm->fetch );
-				delete $list->{ $hdl->{system_id} };
-				$this->shm->store( encode_json($list) );
-				$this->shm->unlock;
+			if ( $hdl->{system_id} ) {
+				if ( $ESME->{$login}->{'already_connected'} <= 0 ) {
+					$this->shm->lock;
+					my $list = decode_json( $this->shm->fetch );
+					delete $list->{ $hdl->{system_id} };
+					$this->shm->store( encode_json($list) );
+					$this->shm->unlock;
+				} else {
+					$this->shm->lock;
+					my $list = decode_json( $this->shm->fetch );
+					$list->{$login}->{'already_connected'} = $ESME->{$login}->{'already_connected'};
+					$this->shm->store( encode_json($list) );
+					$this->shm->unlock;
+				}
 			}
 
 		} else {
 
 			$this->speak("[$$] Incoming event arrived but no SMPP PDU!");
 			$this->log( "warning", "Incoming event arrived from [${peer_addr}:${peer_port}] but no SMPP PDU!" );
-
 		}
 
 	} else {

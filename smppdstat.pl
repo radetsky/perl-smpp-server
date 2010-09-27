@@ -76,15 +76,19 @@ sub run {
 	printf("Start time: %s\nUptime: %s\n",$str_start_time,$str_uptime); 
 
 	printf("Connected list: \n");
-	printf("  SYSTEM_ID  |    MODE    | BANDWIDTH |   SENT   | RECEIVED \n");
+	printf("-------------+------------+-----------+----------+----------+-----------\n");
+	printf("  SYSTEM_ID  |    MODE    | BANDWIDTH |   SENT   | RECEIVED | CONNECTED\n");
+	printf("-------------+------------+-----------+----------+----------+-----------\n");
 	foreach my $login ( keys %$list) {
 		if ($login eq $my_local_data) { next; }
 
-		printf("%13s|%12s|%11s|%10d|%10d\n",
+		printf("%13s|%12s|%11s|%10d|%10d|%10d\n",
 			$login,
 			$list->{$login}->{'mode'},
 			$list->{$login}->{'bandwidth'},
-			0,0); 
+			$list->{$login}->{'sent'},
+			$list->{$login}->{'received'},
+			$list->{$login}->{'already_connected'}); 
 
 	}
 
