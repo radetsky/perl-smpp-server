@@ -177,4 +177,13 @@ Monday 20.09.10 - Friday 24.09.10
 + Bandwidth works in two ways 
 + smppdstat.pl shows startime, uptime, list of connected ESME. 
 
+Monday 27.09.10 - Friday 01.10.10 
+---------------------------------
++ smppdstat shows connected counter, sent and received messages counter from ESME
++ smppserver uses the random() while select socket for deliver_sm() in case of few sim.connections of ESME
++ smppdc can remove any connected ESME. $ smppdc.pl --kick=system_id 
+
+
+
+
 

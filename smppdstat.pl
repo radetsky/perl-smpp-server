@@ -5,18 +5,17 @@
 #
 #        USAGE:  ./smppd.pl
 #
-#  DESCRIPTION:  NetSDS SMPP Server
+#  DESCRIPTION:  NetSDS SMPP Server V2 stat tool
 #
 #      OPTIONS:  ---
 # REQUIREMENTS:
 #         BUGS:  ---
 #        NOTES:  ---
-#       AUTHOR:  Michael Bochkaryov (Rattler), <misha@rattler.kiev.ua>
+#       AUTHOR:  Alex Radetsky <rad@rad.kiev.ua>
 #      COMPANY:  Net.Style
 #      VERSION:  1.0
-#      CREATED:  12.07.2009 15:15:03 UTC
-#     REVISION:  ---
-#     MODIFIED:  Alex Radetsky (rad), <rad@rad.kiev.ua>
+#      CREATED:  Septemper 2010 
+#     REVISION:  002
 #===============================================================================
 
 use 5.8.0;
@@ -143,7 +142,6 @@ Empty.
 
 =head1 AUTHOR
 
-Michael Bochkaryov <misha@rattler.kiev.ua>
 Alex Radetsky <rad@rad.kiev.ua>
 
 

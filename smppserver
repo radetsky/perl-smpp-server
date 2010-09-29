@@ -171,7 +171,13 @@ sub initialize {
 		$this->speak("Sent TERM to $perm processes");
 		$this->{to_finalize} = 1;
 	};
+	$SIG{USR1} = sub {
+		$this->speak("SIGUSR1 caught");
+		$this->log( "info", "SIGUSR1 caught" );
+		$this->_kick();      # Seek and destrou
+		$this->_reload();    # Reload users configuration
 
+	};
 	# Initialize signals processing
 	# $this->set_signal_processors();
 
@@ -1185,7 +1191,6 @@ sub cmd_bind_transmitter {
 				$list->{$login}->{'sent'}              = $ESME->{$login}->{'sent'};
 				$list->{$login}->{'received'}          = $ESME->{$login}->{'received'};
 
-
 				$this->shm->lock;
 				$this->shm->store( encode_json($list) );
 				$this->shm->unlock;
@@ -1281,11 +1286,10 @@ sub cmd_bind_receiver {
 				$list->{$login}->{'sent'}              = $ESME->{$login}->{'sent'};
 				$list->{$login}->{'received'}          = $ESME->{$login}->{'received'};
 
-
 				$this->shm->lock;
 				$this->shm->store( encode_json($list) );
 				$this->shm->unlock;
-			}
+			} ## end if ( $resp_status == 0x00)
 
 		} else {
 			$this->log( "warning", "Cant authenticate ESME: [$login:$passwd]" );
@@ -1541,6 +1545,35 @@ sub _process_socket {
 	} ## end else [ if ( !$pdu )
 
 } ## end sub _process_socket
+
+sub _kick {
+	my $this = shift;
+
+	my $list = decode_json( $this->shm->fetch );
+	foreach my $login ( keys %$list ) { 
+		if ( defined ( $list->{$login}->{'kick'} ) ) { 
+			$this->_shutup ($login); 
+		} 
+	}
+}
+
+sub _reload {
+	my $this = shift;
+
+
+
+}
+
+sub _shutup { 
+	my ($this, $login) = @_; 
+
+	foreach my $hdl ( values %{ $this->handlers } ) {
+		my $system_id = $hdl->{'system_id'}; 
+		if ($system_id eq $login) { 
+			my $seq = $hdl->{smpp}->unbind(); 
+		}
+	}
+}
 
 1;
 #===============================================================================
