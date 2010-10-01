@@ -182,8 +182,10 @@ Monday 27.09.10 - Friday 01.10.10
 + smppdstat shows connected counter, sent and received messages counter from ESME
 + smppserver uses the random() while select socket for deliver_sm() in case of few sim.connections of ESME
 + smppdc can remove any connected ESME. $ smppdc.pl --kick=system_id 
-
-
-
++ fixed bug in deliver_sm with mclass
++ global throttling works 
++ fixed memory leak bug 
++ parameter event_log.edr_file in config file. Default: commented. 
+ 
 
 

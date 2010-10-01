@@ -28,9 +28,9 @@ SMPPServerV2->run(
 	verbose     => 1,
 	use_pidfile => 1,
 	has_conf    => 1,
+	debug       => 1,
 	conf_file   => "./smppserver.conf",
-	edr_file    => "./log/events.log",
-	debug       => 1
+#	edr_file    => "./log/events.log",
 );
 
 1;
@@ -50,15 +50,12 @@ use NetSDS::Util::Misc;
 use NetSDS::Queue;
 use NetSDS::App::SMSTradeOutQ;
 use NetSDS::App::SMSTradeInQ;
-
 use IPC::ShareLite;
 use JSON;
-
 use DBI;
-
 use Time::HiRes qw(usleep);
-
 use Data::Dumper;
+use POSIX qw(floor);
 
 # SMPP PDU command_id table
 use constant cmd_tab => {
@@ -107,11 +104,6 @@ sub initialize {
 		$this->log( "info", "Logger started" );
 	}
 
-	# Initialize EDR writer
-	if ( $this->edr_file ) {
-		$this->{edr_writer} = NetSDS::EDR->new( filename => $this->edr_file );
-	}
-
 	# Initialize configuration
 	if ( $this->{has_conf} ) {
 
@@ -135,9 +127,14 @@ sub initialize {
 
 	} ## end if ( $this->{has_conf})
 
+	# Initialize EDR writer
+	if ( defined ( $this->{conf}->{'event_log'}->{'edr_file'} ) ) {
+		$this->{edr_writer} = NetSDS::EDR->new( filename => $this->{conf}->{'event_log'}->{'edr_file'} );
+	}
+
 	# Daemonize, if needed
 	if ( $this->daemon() ) {
-		$this->speak("[$$]Daemonize, switch verbosity to false.");
+		$this->speak("[$$] Daemonize, switch verbosity to false.");
 		$this->{verbose} = undef;
 		Proc::Daemon::Init;
 	}
@@ -206,7 +203,7 @@ sub initialize {
 sub _edr_write {
 	my ( $this, $params ) = @_;
 
-	unless ( defined( $this->edr_file ) ) {
+	unless ( defined( $this->{conf}->{'event_log'}->{'edr_file'} ) ) {
 		return undef;
 	}
 
@@ -346,6 +343,8 @@ sub _auth_esme {
 				Status => 'OK',
 			}
 		);
+
+		return 1; 
 
 	} else {
 
@@ -675,6 +674,29 @@ sub _authorize_submit {
 	return undef;
 } ## end sub _authorize_submit
 
+sub _find_current_bandwidth_k {
+
+	my ( $this, $login ) = @_;
+
+	# Find sum of bandwidth of all connected users;
+	my $s = 0;
+	foreach my $system_id ( keys %$ESME ) {
+		$s = $s + $ESME->{$system_id}->{'bandwidth'};
+	}
+	unless ( defined( $this->{conf}->{'throttle'}->{'bandwidth'} ) ) {
+		return 1;    # global throttling not defined. Using unlimited.
+	}
+	my $global_band = $this->{conf}->{'throttle'}->{'bandwidth'};
+	my $user_band   = $ESME->{$login}->{'bandwidth'};
+
+	my $k = floor( $user_band * $global_band ) / $s;
+
+	# Коэффициент глобального ограничения есть ( пользовательское ограничение * глобальное ) / ( сумму всех ограничение всех подключенных пользователей ) . Доказано RAD.
+
+	return $k;
+
+} ## end sub _find_current_bandwidth_k
+
 =item B<_throttling> 
 
 Check for count SMS in seconds 
@@ -712,13 +734,22 @@ sub _throttling {
 	unless ( defined( $ESME->{$login}->{'last_second_sm_received'} ) ) {
 		$ESME->{$login}->{'last_second_sm_received'} = 0;
 	}
+	# Global system bandwidth check
+	my $k = $this->_find_current_bandwidth_k($login);
+	if ( ( $ESME->{$login}->{'last_second_sm_received'} + 1 ) > $k ) {
+		$this->log( "warning", "Deny send SMS from $login for GLOBAL THROTTLING reason." );
+		$this->speak("[$$] Deny send SMS from $login for GLOBAL THROTTLING reason.");
+		return undef;
+	}
 
+	# Local user bandwidth check
 	if ( ( $ESME->{$login}->{'last_second_sm_received'} + 1 ) > $ESME->{$login}->{'bandwidth'} ) {
 		$this->log( "warning", "Deny send SMS from $login for THROTTLING reason." );
 		$this->speak("[$$] Deny send SMS from $login for THROTTLING reason.");
 		return undef;
 		# Deny
 	}
+
 	$ESME->{$login}->{'last_second_sm_received'} = $ESME->{$login}->{'last_second_sm_received'} + 1;
 	return 1;    # accept
 
@@ -778,7 +809,6 @@ sub cmd_submit_sm {
 
 		unless ( defined( $ESME->{ $hdl->{system_id} } ) ) {
 			$queue_msg->{'esme_id'} = undef;
-			# FIXME: try to reload user data
 
 		} else {
 			$queue_msg->{'esme_id'} = $ESME->{ $hdl->{system_id} }->{'esme_id'};
@@ -905,21 +935,29 @@ sub cmd_submit_sm {
 				Event          => 'Submit',
 				ESME           => $hdl->{system_id},
 				Status         => 'FAIL',
-				ResponseStatus => $resp_status
+				ResponseStatus => $resp_status, 
+				MessageId      => $message_id, 
+				PduSeq         => $pdu->{seq},
+				From           => $pdu->{source_addr}, 
+				To             => $pdu->{destination_addr},
+				Text           => $pdu->{short_message},
 			}
 		);
 
 	}
-
 	if ( $resp_status == 0x00 ) {
-
 		$this->_edr_write(
 			{
 				Event          => 'Submit',
 				ESME           => $hdl->{system_id},
 				Status         => 'OK',
-				ResponseStatus => $resp_status
-			}
+				ResponseStatus => $resp_status,
+				MessageId      => $message_id,
+				PduSeq         => $pdu->{seq},
+				From           => $pdu->{source_addr}, 
+				To             => $pdu->{destination_addr},
+				Text           => $pdu->{short_message},
+		   }
 		);
 		$this->_increase_received( $hdl->{system_id} );
 
@@ -974,7 +1012,7 @@ sub cmd_unbind {
 
 	# Close socket and remove record
 	$hdl->{smpp}->close();
-	undef $this->{handlers}->{ $hdl->{id} };
+	delete $this->{handlers}->{ $hdl->{id} };
 
 	$this->_edr_write(
 		{
@@ -1113,8 +1151,8 @@ sub cmd_bind_transceiver {
 
 			# Close socket and remove record
 			$hdl->{smpp}->close();
-
-			undef $this->{handlers}->{ $hdl->{id} };
+			#undef $this->{handlers}->{ $hdl->{id} };
+			delete $this->{handlers}->{ $hdl->{id} };
 
 		} ## end else [ if ( $this->_auth_esme...
 	} ## end else [ if ( $hdl->{authenticated...
@@ -1168,7 +1206,6 @@ sub cmd_bind_transmitter {
 
 	} else {
 
-		# FIXME
 		# Authentication
 		if ( $this->_auth_esme( $login, $passwd ) ) {
 			$this->speak("[$$] ESME '$login' successfully authenticated");
@@ -1212,7 +1249,8 @@ sub cmd_bind_transmitter {
 
 			# Close socket and remove record
 			$hdl->{smpp}->close();
-			undef $this->{handlers}->{ $hdl->{id} };
+			delete $this->{handlers}->{ $hdl->{id} };
+			# undef $this->{handlers}->{ $hdl->{id} };
 
 		}
 	} ## end else [ if ( $hdl->{authenticated...
@@ -1263,7 +1301,6 @@ sub cmd_bind_receiver {
 
 	} else {
 
-		# FIXME
 		# Authentication
 		if ( $this->_auth_esme( $login, $passwd ) ) {
 			$this->speak("ESME '$login' successfully authenticated");
@@ -1308,8 +1345,8 @@ sub cmd_bind_receiver {
 
 			# Close socket and remove record
 			$hdl->{smpp}->close();
-
-			undef $this->{handlers}->{ $hdl->{id} };
+			#undef $this->{handlers}->{ $hdl->{id} };
+			delete $this->{handlers}->{ $hdl->{id} };
 
 		} ## end else [ if ( $this->_auth_esme...
 	} ## end else [ if ( $hdl->{authenticated...
@@ -1349,7 +1386,6 @@ sub _process_out_queue {
 			return 1;
 		}
 
-		# FIXME - provide incorrect data handling
 		my $mo = decode_json( conv_base64_str($line) );
 
 		# Check if exist in MO esme_id
@@ -1406,7 +1442,7 @@ sub _deliver_sm {
 
 		# Set default parameters (for MO SM)
 		my $message_id       = $mo->{id};
-		my $esm_class        = 0x00;
+		my $esm_class        = $mo->{mclass};
 		my $source_addr_ton  = 0x01;
 		my $source_addr_npi  = 0x01;
 		my $source_addr      = $mo->{src_addr};
@@ -1417,9 +1453,9 @@ sub _deliver_sm {
 		my $data_coding      = $mo->{coding};
 
 		# Set ESM class
-		if ( $mo->{dlr} ) {
-			$esm_class = 0x04;    # DLR
-		}
+		#if ( $mo->{dlr} ) {
+		#		$esm_class = 0x04;    # DLR
+		#}
 
 		my $system_id = $hdl->{system_id};
 		$this->speak("[$$] Deliver SM from '$source_addr' to '$destination_addr' via '$system_id' ");
@@ -1464,6 +1500,7 @@ sub _process_socket {
 
 	# Try to read PDU
 	my $pdu = $hdl->{smpp}->read_pdu();
+
 	if ( !$pdu ) {
 
 		# Disconnect if EOF
@@ -1481,7 +1518,7 @@ sub _process_socket {
 
 			# Close socket and remove record
 			$hdl->{smpp}->close();
-			undef $this->{handlers}->{ $hdl->{id} };
+			delete $this->{handlers}->{ $hdl->{id} };
 
 			my $login = $hdl->{system_id};
 			# Update SHM struture (only for defined system_id)
@@ -1550,27 +1587,25 @@ sub _kick {
 	my $this = shift;
 
 	my $list = decode_json( $this->shm->fetch );
-	foreach my $login ( keys %$list ) { 
-		if ( defined ( $list->{$login}->{'kick'} ) ) { 
-			$this->_shutup ($login); 
-		} 
+	foreach my $login ( keys %$list ) {
+		if ( defined( $list->{$login}->{'kick'} ) ) {
+			$this->_shutup($login);
+		}
 	}
 }
 
 sub _reload {
 	my $this = shift;
 
-
-
 }
 
-sub _shutup { 
-	my ($this, $login) = @_; 
+sub _shutup {
+	my ( $this, $login ) = @_;
 
 	foreach my $hdl ( values %{ $this->handlers } ) {
-		my $system_id = $hdl->{'system_id'}; 
-		if ($system_id eq $login) { 
-			my $seq = $hdl->{smpp}->unbind(); 
+		my $system_id = $hdl->{'system_id'};
+		if ( $system_id eq $login ) {
+			my $seq = $hdl->{smpp}->unbind();
 		}
 	}
 }
