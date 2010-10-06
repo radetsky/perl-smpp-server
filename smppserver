@@ -50,7 +50,7 @@ use NetSDS::Util::Misc;
 use NetSDS::Queue;
 use NetSDS::App::SMSTradeOutQ;
 use NetSDS::App::SMSTradeInQ;
-use IPC::ShareLite;
+use IPC::ShareLite qw ( :lock );
 use JSON;
 use DBI;
 use Time::HiRes qw(usleep);
