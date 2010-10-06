@@ -1,0 +1,5 @@
+Q: print() on closed filehandle EDRF at NetSDS/EDR.pm line 125.
+What is wrong? 
+A: Edit your smppserver.conf and check edr_file parameter. 
+It means that EDR subsystem can't write to file. May be can't create.
+
