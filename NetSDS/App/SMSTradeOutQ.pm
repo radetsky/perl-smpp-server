@@ -163,12 +163,17 @@ sub run {
 
 			foreach my $msg ( keys %$queue_msgs ) {
 				my $queue_msg = $queue_msgs->{$msg};
+				$this->log('debug',Dumper($queue_msg)) if ($this->{'debug'});
+
 				$queue_msg = $this->_validate_mo($queue_msg);
 				my $json_text = to_json( $queue_msg, { ascii => 1, pretty => 1 } );
+
 				# Sending to SMPPd
 				my $res = $connected->print( conv_str_base64($json_text) . "\n" );
-				# FIXME : дождаться подтверждения того, что сообщение послано.
+				
+				# Дождаться подтверждения того, что сообщение послано.
 				# И только после этого удалить, иначе не удалять.
+				
 				my $confirm = $connected->getline;
 				if ( $confirm =~ /OK/ ) {
 					$this->_delete_mo( $queue_msg->{'internal_id'} );
@@ -184,12 +189,9 @@ sub run {
 sub _validate_mo {
 	my ( $this, $mo ) = @_;
 
-	#$mo->{'to'}          = $mo->{'dst_addr'};
-	#$mo->{'from'}        = $mo->{'src_addr'};
 	$mo->{'internal_id'} = $mo->{'id'};                     # Key to delete message
 	$mo->{'id'}          = $mo->{'message_id'};             # UUID message id
 	$mo->{'text'}        = conv_hex_str( $mo->{'body'} );
-	#$mo->{'data_coding'} = $mo->{'coding'};
 
 	return $mo;
 }
@@ -231,27 +233,25 @@ sub _connect_db {
 		last;
 	}
 
-	# $this->msgsth( $this->msgdbh->prepare("select id,msg_type,esme_id,src_addr,dst_addr,body,coding,message_id from messages where msg_type='MO' or msg_type='DLR';") );
-
 } ## end sub _connect_db
 
 sub _get_mo {
 
 	my ( $this, @params ) = @_;
-
 	$this->_connect_db;
 
 	my $query = undef;
 	my $res   = {};
 
 	unless ( defined( $this->shm ) ) {
+		$this->log("error","Can't access to shared memory.") if ($this->debug);
 		return {};
+
 	} else {
 
 		# List active EMSEs
 		my $list  = decode_json( $this->shm->fetch );
 		my $my_local_data = defined( $this->conf->{'shm'}->{'magickey'} ) ? $this->conf->{'shm'}->{'magickey'} : 'My L0c4l D4t4';
-		
 
 		foreach my $login ( keys %$list ) {
 			if ($login eq $my_local_data) { 
@@ -263,15 +263,16 @@ sub _get_mo {
 			my $esme_id   = $list->{$login}->{'esme_id'};
 
 			if ( ( $mode eq 'transciever' ) or ( $mode eq 'receiver' ) ) {
-				$query = "select id,msg_type,esme_id,src_addr,dst_addr,body,coding,message_id from messages where msg_type='MO' or msg_type='DLR' and esme_id = $esme_id order by id limit $bandwidth";
-				#$this->log("debug",$query);
+				$query = "select id,msg_type,esme_id,src_addr,dst_addr,body,coding,udh,mwi,mclass,validity,deferred,message_id,registered_delivery,service_type,extra from messages where msg_type='MO' or msg_type='DLR' and esme_id = $esme_id order by id limit $bandwidth";
+				$this->log("debug","MO-DLR query: $query") if ( $this->debug) ; 
 				my $res_esme = $this->msgdbh->selectall_hashref( $query, "id" );
 				$res = { %$res, %$res_esme };
 			}
 		}
 
 	} ## end else
-
+	$this->log("debug", "Returning ". keys (%$res) ." messages to push out.") if ($this->debug);
+	
 	return $res;
 
 } ## end sub _get_mo

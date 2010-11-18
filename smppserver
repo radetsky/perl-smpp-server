@@ -28,9 +28,9 @@ SMPPServerV2->run(
 	verbose     => 1,
 	use_pidfile => 1,
 	has_conf    => 1,
-	debug       => 1,
+	debug       => undef,
 	conf_file   => "./smppserver.conf",
-#	edr_file    => "./log/events.log",
+	#	edr_file    => "./log/events.log",
 );
 
 1;
@@ -128,7 +128,7 @@ sub initialize {
 	} ## end if ( $this->{has_conf})
 
 	# Initialize EDR writer
-	if ( defined ( $this->{conf}->{'event_log'}->{'edr_file'} ) ) {
+	if ( defined( $this->{conf}->{'event_log'}->{'edr_file'} ) ) {
 		$this->{edr_writer} = NetSDS::EDR->new( filename => $this->{conf}->{'event_log'}->{'edr_file'} );
 	}
 
@@ -344,7 +344,7 @@ sub _auth_esme {
 			}
 		);
 
-		return 1; 
+		return 1;
 
 	} else {
 
@@ -371,7 +371,7 @@ sub _increase_received {
 
 	$ESME->{$login}->{'received'} = $ESME->{$login}->{'received'} + 1;
 
-	$this->shm->lock(LOCK_EX); 
+	$this->shm->lock(LOCK_EX);
 	my $list = decode_json( $this->shm->fetch );
 	$list->{$login}->{'received'} = $ESME->{$login}->{'received'};
 	$this->shm->store( encode_json($list) );
@@ -935,16 +935,16 @@ sub cmd_submit_sm {
 				Event          => 'Submit',
 				ESME           => $hdl->{system_id},
 				Status         => 'FAIL',
-				ResponseStatus => $resp_status, 
-				MessageId      => $message_id, 
+				ResponseStatus => $resp_status,
+				MessageId      => $message_id,
 				PduSeq         => $pdu->{seq},
-				From           => $pdu->{source_addr}, 
+				From           => $pdu->{source_addr},
 				To             => $pdu->{destination_addr},
 				Text           => $pdu->{short_message},
 			}
 		);
 
-	}
+	} ## end if ( $resp_status != 0x00)
 	if ( $resp_status == 0x00 ) {
 		$this->_edr_write(
 			{
@@ -954,10 +954,10 @@ sub cmd_submit_sm {
 				ResponseStatus => $resp_status,
 				MessageId      => $message_id,
 				PduSeq         => $pdu->{seq},
-				From           => $pdu->{source_addr}, 
+				From           => $pdu->{source_addr},
 				To             => $pdu->{destination_addr},
 				Text           => $pdu->{short_message},
-		   }
+			}
 		);
 		$this->_increase_received( $hdl->{system_id} );
 
@@ -1388,6 +1388,8 @@ sub _process_out_queue {
 
 		my $mo = decode_json( conv_base64_str($line) );
 
+		$this->log( "info", "got SM from OutQ:" . Dumper($mo) ) if ( $this->{debug} );
+
 		# Check if exist in MO esme_id
 		unless ( defined( $mo->{'esme_id'} ) ) {
 			$this->speak("[$$] MO with empty esme_id");
@@ -1422,11 +1424,14 @@ sub _process_out_queue {
 				$this->log( "warning", "ESME " . $mo->{'system_id'} . "not found in active list. " );
 				$this->out_queue->print("ERROR\n");
 			} else {
-				my $hdl_index = rand($esme_connect_found);    # Select random connect
+				my $hdl_index = rand($esme_connect_found);          # Select random connect
 				my $hdl       = $esme_connects[$hdl_index];
-				$this->_deliver_sm( $hdl, $mo );              # send deliver_sm to ESME
-				$this->out_queue->print("OK\n");
-
+				my $dlvrd     = $this->_deliver_sm( $hdl, $mo );    # send deliver_sm to ESME
+				unless ( defined($dlvrd) ) {
+					$this->out_queue->print("ERROR\n");
+				} else {
+					$this->out_queue->print("OK\n");
+				}
 			}
 
 		} ## end else
@@ -1452,11 +1457,6 @@ sub _deliver_sm {
 		my $msg_text         = $mo->{text};
 		my $data_coding      = $mo->{coding};
 
-		# Set ESM class
-		#if ( $mo->{dlr} ) {
-		#		$esm_class = 0x04;    # DLR
-		#}
-
 		my $system_id = $hdl->{system_id};
 		$this->speak("[$$] Deliver SM from '$source_addr' to '$destination_addr' via '$system_id' ");
 		$this->log( "info", "Deliver SM from '$source_addr' to '$destination_addr' via '$system_id'" );
@@ -1475,19 +1475,23 @@ sub _deliver_sm {
 			data_coding      => $data_coding,
 		);
 
+		$hdl->{out_seq}++;
+		$this->_edr_write(
+			{
+				Event  => 'Deliver',
+				ESME   => $hdl->{system_id},
+				Status => 'OK'
+			}
+		);
+
+		$this->_increase_sent( $hdl->{system_id} );
+		return 1;
 	} ## end if ( $mo->{id} )
 
-	$hdl->{out_seq}++;
+	$this->log( "warning", "MO/DLR does not have Message-ID." );
+	$this->log( "info",    Dumper($mo) );
 
-	$this->_edr_write(
-		{
-			Event  => 'Deliver',
-			ESME   => $hdl->{system_id},
-			Status => 'OK'
-		}
-	);
-
-	$this->_increase_sent( $hdl->{system_id} );
+	return undef;
 
 } ## end sub _deliver_sm
 
