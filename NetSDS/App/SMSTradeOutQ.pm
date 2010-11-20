@@ -163,22 +163,26 @@ sub run {
 
 			foreach my $msg ( keys %$queue_msgs ) {
 				my $queue_msg = $queue_msgs->{$msg};
-				$this->log('debug',Dumper($queue_msg)) if ($this->{'debug'});
+				$this->log( 'debug', Dumper($queue_msg) ) if ( $this->{'debug'} );
 
 				$queue_msg = $this->_validate_mo($queue_msg);
+				if ( defined( $queue_msg->{'extra'} ) ) {
+					$queue_msg = $this->_extra_decode($queue_msg);
+				}
+
 				my $json_text = to_json( $queue_msg, { ascii => 1, pretty => 1 } );
 
 				# Sending to SMPPd
 				my $res = $connected->print( conv_str_base64($json_text) . "\n" );
-				
+
 				# Дождаться подтверждения того, что сообщение послано.
 				# И только после этого удалить, иначе не удалять.
-				
+
 				my $confirm = $connected->getline;
 				if ( $confirm =~ /OK/ ) {
 					$this->_delete_mo( $queue_msg->{'internal_id'} );
 				}
-			}
+			} ## end foreach my $msg ( keys %$queue_msgs)
 			sleep(1);
 
 		} ## end while (1)
@@ -194,6 +198,28 @@ sub _validate_mo {
 	$mo->{'text'}        = conv_hex_str( $mo->{'body'} );
 
 	return $mo;
+}
+
+sub _extra_decode {
+
+	my ( $this, $mo ) = @_;
+
+	my $extra = decode_json( $mo->{'extra'} );
+	undef $mo->{'extra'};
+
+	foreach my $parameter ( keys %$extra ) {
+		if ( $parameter =~ /message_state/i ) { 
+			$mo->{$parameter} = pack ("c",$extra->{$parameter});
+			next;
+		}
+		if ( $parameter =~ /receipted_message_id/i ) { 
+			$mo->{$parameter} = $extra->{$parameter} . chr(0);  
+			next; 
+		}
+		$mo->{$parameter} = $extra->{$parameter};
+	}
+	return $mo;
+
 }
 
 sub _delete_mo {
@@ -244,17 +270,17 @@ sub _get_mo {
 	my $res   = {};
 
 	unless ( defined( $this->shm ) ) {
-		$this->log("error","Can't access to shared memory.") if ($this->debug);
+		$this->log( "error", "Can't access to shared memory." ) if ( $this->debug );
 		return {};
 
 	} else {
 
 		# List active EMSEs
-		my $list  = decode_json( $this->shm->fetch );
+		my $list          = decode_json( $this->shm->fetch );
 		my $my_local_data = defined( $this->conf->{'shm'}->{'magickey'} ) ? $this->conf->{'shm'}->{'magickey'} : 'My L0c4l D4t4';
 
 		foreach my $login ( keys %$list ) {
-			if ($login eq $my_local_data) { 
+			if ( $login eq $my_local_data ) {
 				next;
 			}
 
@@ -264,15 +290,15 @@ sub _get_mo {
 
 			if ( ( $mode eq 'transciever' ) or ( $mode eq 'receiver' ) ) {
 				$query = "select id,msg_type,esme_id,src_addr,dst_addr,body,coding,udh,mwi,mclass,validity,deferred,message_id,registered_delivery,service_type,extra from messages where msg_type='MO' or msg_type='DLR' and esme_id = $esme_id order by id limit $bandwidth";
-				$this->log("debug","MO-DLR query: $query") if ( $this->debug) ; 
+				$this->log( "debug", "MO-DLR query: $query" ) if ( $this->debug );
 				my $res_esme = $this->msgdbh->selectall_hashref( $query, "id" );
 				$res = { %$res, %$res_esme };
 			}
 		}
 
 	} ## end else
-	$this->log("debug", "Returning ". keys (%$res) ." messages to push out.") if ($this->debug);
-	
+	$this->log( "debug", "Returning " . keys(%$res) . " messages to push out." ) if ( $this->debug );
+
 	return $res;
 
 } ## end sub _get_mo

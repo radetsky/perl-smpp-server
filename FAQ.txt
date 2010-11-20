@@ -3,3 +3,10 @@ What is wrong?
 A: Edit your smppserver.conf and check edr_file parameter. 
 It means that EDR subsystem can't write to file. May be can't create.
 
+Q: How I can to deliver DLR message to ESME 
+A: Please look into 'tests' subdirectory for DLRtest.pl. 
+It uses receipt_message_id and message_state TLV parameters to tell ESME 
+about delivered or not delivered SMS. 
+
+
+

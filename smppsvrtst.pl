@@ -114,7 +114,7 @@ unless ( defined($dbh) ) {
 }
 
 my $sth = $dbh->prepare_cached("insert into messages ( msg_type, esme_id, src_addr, dst_addr, body, coding, udh, mwi, mclass, message_id, validity, deferred, registered_delivery, service_type, extra, received ) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,? ) ");
-$sth->execute( 'MO', 1, '0504139380', 'smppsvrtst.pl', conv_str_hex('bla-bla-bla'), 2, undef, undef, undef, '1010101010101010101', 1440, undef, undef, undef, undef, '2010-08-30 23:59:00' );
+$sth->execute( 'MO', 1, '0504139380', 'smppsvrtst.pl', conv_str_hex('bla-bla-bla'), 2, undef, undef, 0, '1010101010101010101', 1440, undef, undef, undef, undef, '2010-08-30 23:59:00' );
 $pdu = $cli->read_pdu();
 warn Dumper($pdu);
 print "ok 6: receive SM\n";
@@ -123,7 +123,7 @@ print "ok 6: receive SM\n";
 
 $t0 = [ gettimeofday ];
 for (my $cx = 0; $cx < 1000; $cx++ ) {
-	$sth->execute( 'MO',2,'0504139380','smppsvrtst.pl',conv_str_hex('bla-bla-bla'),0,undef,undef,undef,'1010101010101010101',1440,undef,undef,undef,undef,'2010-08-30 23:59:00');
+	$sth->execute( 'MO',2,'0504139380','smppsvrtst.pl',conv_str_hex('bla-bla-bla'),0,undef,undef,0,'1010101010101010101',1440,undef,undef,undef,undef,'2010-08-30 23:59:00');
 };
 
 $elapsed = tv_interval ( $t0, [ gettimeofday ] );
@@ -163,7 +163,8 @@ if ($cli) {
 # Test No. 11: New bind transciever . 
 $seq = $cli2->bind_transceiver( system_id => 'SMSGW', password => 'secret' ) or die;
 $pdu = $cli2->read_pdu() or die;
-if ( $pdu->{status} == 0x0E) {          ## STATUS
+warn Dumper ($pdu);
+if ( ( $pdu->{status} == 0x0E) or ($pdu->{status} == 0x0D ) ) {          ## STATUS
 	print "ok 11: can't connect more than 1 time for SMSGW with NULL (default 1) max_connections.\n"; 
 } else { 
 	warn Dumper ($pdu); 

@@ -273,7 +273,7 @@ sub start {
 
 sub _auth_esme {
 
-	my ( $this, $login, $passwd ) = @_;
+	my ( $this, $login, $passwd, $addr_port ) = @_;
 
 	# Loggin' begin auth procedure
 	$this->log( "info", "Begin authentication for \"$login\"" );
@@ -283,6 +283,19 @@ sub _auth_esme {
 	unless ( defined( $this->_connect_db() ) ) {
 		return undef;
 	}
+
+	# Check config
+	unless ( defined( $this->conf->{auth}->{query} ) ) {
+		$this->log( "warning", "Undefined main query in auth section of config." );
+		return undef;
+	}
+
+	unless ( defined( $this->conf->{auth}->{query_system_id} ) ) {
+		$this->log( "warning", "Undefined query_system_id in auth section of config." );
+		return undef;
+	}
+
+	# First of all try to get information with full information like login and password
 	# Execute SQL query (should be present in configuration file)
 	my $sth = $this->authdbh->prepare( $this->conf->{auth}->{query} );
 	$sth->execute( $login, $passwd );
@@ -338,9 +351,10 @@ sub _auth_esme {
 
 		$this->_edr_write(
 			{
-				Event  => 'Authentication',
-				ESME   => $system_id,
-				Status => 'OK',
+				Event     => 'Authentication',
+				ESME      => $system_id,
+				Status    => 'OK',
+				Addr_Port => $addr_port,
 			}
 		);
 
@@ -348,16 +362,38 @@ sub _auth_esme {
 
 	} else {
 
-		$this->_edr_write(
-			{
-				Event  => 'Authentication',
-				ESME   => $login,
-				Status => 'FAIL'
-			}
-		);
+		# Try to find just system_id.
+
+		my $sth = $this->authdbh->prepare( $this->conf->{auth}->{query_system_id} );
+		$sth->execute($login);
+
+		# Try to get one row or return undef
+		if ( my $res = $sth->fetchrow_hashref() ) {
+			# If found - then password incorrect
+			# else - system incorrect
+			$this->_edr_write(
+				{
+					Event     => 'Authentication',
+					ESME      => $login,
+					Status    => 'FAIL',
+					Addr_Port => $addr_port,
+					RespStatus    => 0x0E,
+				}
+			);
+		} else {
+			$this->_edr_write(
+				{
+					Event     => 'Authentication',
+					ESME      => $login,
+					Status    => 'FAIL',
+					Addr_Port => $addr_port,
+					RespStatus    => 0x0F,
+				}
+			);
+		}
 		return undef;
 
-	}
+	} ## end else [ if ( my $res = $sth->fetchrow_hashref...
 } ## end sub _auth_esme
 
 =item B<_increase_received> 
@@ -664,12 +700,19 @@ sub _authorize_submit {
 	foreach my $source (@allowed_src) {
 		$source = str_trim($source);
 		if ( $source eq $src ) {
-
 			return 1;
 		}
 	}
+	$this->_edr_write(
+		{
+			Event     => 'Submit',
+			ESME      => $login,
+			Status    => 'FAIL',
+			Addr_Port => $src,
+		}
+	);
+
 	$this->log( "warning", "Deny send SMS from '$src' for '$login'" );
-	$this->speak("[$$] Deny send SMS from '$src' for '$login'");
 
 	return undef;
 } ## end sub _authorize_submit
@@ -739,6 +782,15 @@ sub _throttling {
 	if ( ( $ESME->{$login}->{'last_second_sm_received'} + 1 ) > $k ) {
 		$this->log( "warning", "Deny send SMS from $login for GLOBAL THROTTLING reason." );
 		$this->speak("[$$] Deny send SMS from $login for GLOBAL THROTTLING reason.");
+		$this->_edr_write(
+			{
+				Event  => 'Submit',
+				ESME   => $login,
+				Status => 'FAIL',
+				Reason => 'GLOBAL THROTTLING'
+			}
+		);
+
 		return undef;
 	}
 
@@ -746,6 +798,15 @@ sub _throttling {
 	if ( ( $ESME->{$login}->{'last_second_sm_received'} + 1 ) > $ESME->{$login}->{'bandwidth'} ) {
 		$this->log( "warning", "Deny send SMS from $login for THROTTLING reason." );
 		$this->speak("[$$] Deny send SMS from $login for THROTTLING reason.");
+		$this->_edr_write(
+			{
+				Event  => 'Submit',
+				ESME   => $login,
+				Status => 'FAIL',
+				Reason => 'LOGIN THROTTLING'
+			}
+		);
+
 		return undef;
 		# Deny
 	}
@@ -941,6 +1002,7 @@ sub cmd_submit_sm {
 				From           => $pdu->{source_addr},
 				To             => $pdu->{destination_addr},
 				Text           => $pdu->{short_message},
+				Addr_Port      => $hdl->{id},
 			}
 		);
 
@@ -957,6 +1019,7 @@ sub cmd_submit_sm {
 				From           => $pdu->{source_addr},
 				To             => $pdu->{destination_addr},
 				Text           => $pdu->{short_message},
+				Addr_Port      => $hdl->{id},
 			}
 		);
 		$this->_increase_received( $hdl->{system_id} );
@@ -1016,8 +1079,9 @@ sub cmd_unbind {
 
 	$this->_edr_write(
 		{
-			Event => 'Unbind',
-			ESME  => $hdl->{system_id}
+			Event     => 'Unbind',
+			ESME      => $hdl->{system_id},
+			Addr_Port => $hdl->{id},
 		}
 	);
 
@@ -1068,11 +1132,11 @@ sub _authorize_esme {
 	my $resp_status = 0x00000000;
 
 	unless ( defined( $this->_acl_source_ip( $login, $hdl->{id} ) ) ) {
-		return 0x0000000E;    # ESME_RINVPASWD
+		return 0x0000000F;    # ESME_RINVSYSID
 	}
 
 	unless ( defined( $this->_increase_already_connected($login) ) ) {
-		return 0x0000000E;    # ESME_RINVPASWD
+		return 0x0000000D;    # ESME_RBINDFAIL
 	}
 
 	return 0x00000000;        # OK
@@ -1105,8 +1169,8 @@ sub cmd_bind_transceiver {
 
 	} else {
 
-		# Authentication
-		if ( $this->_auth_esme( $login, $passwd ) ) {
+		# Authentication. ID contains IP:PORT value
+		if ( $this->_auth_esme( $login, $passwd, $hdl->{'id'} ) ) {
 			$this->speak("[$$] ESME '$login' successfully authenticated");
 			$this->log( "info", "ESME '$login' successfully authenticated" );
 
@@ -1170,8 +1234,8 @@ sub cmd_bind_transceiver {
 			Event      => 'Bind Transciever',
 			ESME       => $login,
 			Status     => $status,
-			RespStatus => $resp_status
-
+			RespStatus => $resp_status,
+			Addr_Port  => $hdl->{id},
 		}
 	);
 
@@ -1207,7 +1271,7 @@ sub cmd_bind_transmitter {
 	} else {
 
 		# Authentication
-		if ( $this->_auth_esme( $login, $passwd ) ) {
+		if ( $this->_auth_esme( $login, $passwd, $hdl->{'id'} ) ) {
 			$this->speak("[$$] ESME '$login' successfully authenticated");
 			$this->log( "info", "ESME '$login' successfully authenticated" );
 			$resp_status = $this->_authorize_esme( $login, $hdl );
@@ -1266,7 +1330,8 @@ sub cmd_bind_transmitter {
 			Event      => 'Bind Transmitter',
 			ESME       => $login,
 			Status     => $status,
-			RespStatus => $resp_status
+			RespStatus => $resp_status,
+			Addr_Port  => $hdl->{id},
 
 		}
 	);
@@ -1302,7 +1367,7 @@ sub cmd_bind_receiver {
 	} else {
 
 		# Authentication
-		if ( $this->_auth_esme( $login, $passwd ) ) {
+		if ( $this->_auth_esme( $login, $passwd, $hdl->{'id'} ) ) {
 			$this->speak("ESME '$login' successfully authenticated");
 			$this->log( "info", "ESME '$login' successfully authenticated" );
 			$resp_status = $this->_authorize_esme( $login, $hdl );
@@ -1362,7 +1427,8 @@ sub cmd_bind_receiver {
 			Event      => 'Bind Receiver',
 			ESME       => $login,
 			Status     => $status,
-			RespStatus => $resp_status
+			RespStatus => $resp_status,
+			Addr_Port  => $hdl->{id},
 		}
 	);
 
@@ -1458,22 +1524,44 @@ sub _deliver_sm {
 		my $data_coding      = $mo->{coding};
 
 		my $system_id = $hdl->{system_id};
-		$this->speak("[$$] Deliver SM from '$source_addr' to '$destination_addr' via '$system_id' ");
 		$this->log( "info", "Deliver SM from '$source_addr' to '$destination_addr' via '$system_id'" );
+		$this->log( "info", "MO Dump: " . Dumper($mo) );
 
 		# Send deliver_sm
-		$hdl->{smpp}->deliver_sm(
-			source_addr_ton  => $source_addr_ton,    # International (MSISDN)
-			source_addr_npi  => $source_addr_npi,    # E.164
-			source_addr      => $source_addr,
-			dest_addr_ton    => $dest_addr_ton,      # Unknown (default)
-			dest_addr_npi    => $dest_addr_npi,      # E.164
-			destination_addr => $destination_addr,
-			esm_class        => $esm_class,          # MO data (UDH + UD) or DLR
-			short_message    => $msg_text,
-			async            => 1,
-			data_coding      => $data_coding,
-		);
+		if ( ( $esm_class == 4 )
+			and ( defined( $mo->{message_state} ) )
+			and ( defined( $mo->{receipted_message_id} ) ) )
+		{    # DLR
+			$hdl->{smpp}->deliver_sm(
+				source_addr_ton      => $source_addr_ton,             # International (MSISDN)
+				source_addr_npi      => $source_addr_npi,             # E.164
+				source_addr          => $source_addr,
+				dest_addr_ton        => $dest_addr_ton,               # Unknown (default)
+				dest_addr_npi        => $dest_addr_npi,               # E.164
+				destination_addr     => $destination_addr,
+				esm_class            => $esm_class,                   # MO data (UDH + UD) or DLR
+				short_message        => $msg_text,
+				async                => 1,
+				data_coding          => $data_coding,
+				message_state        => $mo->{message_state},
+				receipted_message_id => $mo->{receipted_message_id}
+			);
+		} else {
+
+			$hdl->{smpp}->deliver_sm(
+				source_addr_ton  => $source_addr_ton,                 # International (MSISDN)
+				source_addr_npi  => $source_addr_npi,                 # E.164
+				source_addr      => $source_addr,
+				dest_addr_ton    => $dest_addr_ton,                   # Unknown (default)
+				dest_addr_npi    => $dest_addr_npi,                   # E.164
+				destination_addr => $destination_addr,
+				esm_class        => $esm_class,                       # MO data (UDH + UD) or DLR
+				short_message    => $msg_text,
+				async            => 1,
+				data_coding      => $data_coding,
+			);
+
+		}
 
 		$hdl->{out_seq}++;
 		$this->_edr_write(

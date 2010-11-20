@@ -188,4 +188,9 @@ Monday 27.09.10 - Friday 01.10.10
 + parameter event_log.edr_file in config file. Default: commented. 
  
 
+Saturday 20.11.10 
+-----------------
++ new response codes 
++ new configuration parameter query_system_id
++ new field in EDR - Addr_Port 
 
