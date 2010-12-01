@@ -95,6 +95,21 @@ You must encode your SM text before put it onto database. And decode it after se
 ESME can see original text, or binary, or DLR, etc. 
 
 
+COMMAND STATUS 
+--------------
+
+From November 2010 we using list of next command_statuses:
+0x00 - OK
+0x05 - Already in bound state 
+0x0D - Bind Failed 
+0x0E - Invalid Password (Invalid Password)
+0x0F - Invalid SYSTEM ID (System ID unknown, ACL denies)
+0x58 - Throttle Error
+0x45 - Submit Fail 
+
+
+
+
 CHANGES
 -------
 
