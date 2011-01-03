@@ -45,7 +45,7 @@ my $extra = to_json( $tlv, { ascii => 1, pretty => 1 } );
 my $dlr   = "id:1111111111 sub:001 dlvrd:001 submit date:1011190000 done date:1011192359 stat:DELIVRD err:E Text: Hello, World! ";
 
 my $sth = $dbh->prepare_cached("insert into messages ( msg_type, esme_id, src_addr, dst_addr, body, coding, udh, mwi, mclass, message_id, validity, deferred, registered_delivery, service_type, extra ) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,? ) ");
-$sth->execute( 'DLR', 3, '0504139380', 'smppsvrtst.pl', conv_str_hex($dlr), 0, undef, undef, 4, '1010101010101010101', 1440, undef, undef, undef, $extra );
+$sth->execute( 'DLR', 3, '0504139380', 'smppsvrtst.pl', $dlr, 0, undef, undef, 4, '1010101010101010101', 1440, undef, undef, undef, $extra );
 
 #EOF
 

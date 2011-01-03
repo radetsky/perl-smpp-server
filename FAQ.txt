@@ -8,5 +8,8 @@ A: Please look into 'tests' subdirectory for DLRtest.pl.
 It uses receipt_message_id and message_state TLV parameters to tell ESME 
 about delivered or not delivered SMS. 
 
+Q: ERROR: SMPP: PDU NULL terminated string (system_id) longer than allowed.
+A: smppserver.conf:smpp::local_system_id parameter value as described in SMPP ver 3.4. spec 
+must have maximum 16 bytes length. 
 
 

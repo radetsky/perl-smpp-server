@@ -206,6 +206,43 @@ Monday 27.09.10 - Friday 01.10.10
 Saturday 20.11.10 
 -----------------
 + new response codes 
-+ new configuration parameter query_system_id
++ new configuration parameter query_system_id for search existing system_id in case of incorrect esme/password. 
 + new field in EDR - Addr_Port 
+
+Nov.2010 - Dec.2010
+------------------- 
++ message body translate depends on rules in config file. 
++ fixed many bugs 
++ new SMPP response codes
++ new configuration parameter smpp->local_system_id; 
++ new configuration sections that contain rules how to translate message body. 
+<mt>
+  <body_translate>
+     0 = utf8
+     2 = UTF-16BE
+     urlencode = yes
+  </body_translate>
+</mt>
+<mo>
+  <body_translate>
+     0 = utf8
+     2 = UTF-16BE
+     urldecode = yes
+  </body_translate>
+</mo>
+
+Idea is saving to Database URLEncoded UTF-8 text. But someone wants to get another encodings in database.
+So,please run tests/encoding_list.pl to see all available encodings and change the config for your properties. 
+The left side of the body_translate section is encoding from/to SMPP data_coding field. In the real life this field is very complex binary and I try to get much simple config. So, 
+0 - gsm0338 ( SMPP default alphabet) 
+1 - 8-bit binary 
+2 - UCS2-BE 
+3 - Latin1 (special for CDMA/TDMA networks ) 
+
+If urlencode exists end value is yes/YES/YeS/etc final string will be urlencoded before insert to database.
+
+ 
+
+
+
 

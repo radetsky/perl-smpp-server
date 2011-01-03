@@ -3,6 +3,8 @@
 #         FILE:  SMSTradeOutQ.pm
 #
 #  DESCRIPTION:  Plugin for send Mobile Originated Messages to SMPPServerV2
+#                This plugin reads messages from database for all connected ESME's
+#                and send it to SMPPServer via local TCP-socket.
 #
 #        NOTES:  ---
 #       AUTHOR:  Alex Radetsky (Rad), <rad@rad.kiev.ua>
@@ -39,6 +41,7 @@ use Time::HiRes qw( usleep );
 
 use Data::Dumper;
 use NetSDS::Util::Convert;
+use NetSDS::Util::String;
 use JSON;
 
 use base qw(NetSDS::App);
@@ -143,6 +146,7 @@ sub run {
 	# here is the database read cycle
 
 	while (1) {
+
 		next unless my $connected = $moq_socket->accept;
 		$this->speak("[$$] SMSTradeOutQ Something connected.");
 		while (1) {
@@ -161,11 +165,14 @@ sub run {
 				next;
 			}
 
+			# Read some messages MO and DLR
 			foreach my $msg ( keys %$queue_msgs ) {
 				my $queue_msg = $queue_msgs->{$msg};
+
 				$this->log( 'debug', Dumper($queue_msg) ) if ( $this->{'debug'} );
 
 				$queue_msg = $this->_validate_mo($queue_msg);
+
 				if ( defined( $queue_msg->{'extra'} ) ) {
 					$queue_msg = $this->_extra_decode($queue_msg);
 				}
@@ -193,12 +200,69 @@ sub run {
 sub _validate_mo {
 	my ( $this, $mo ) = @_;
 
-	$mo->{'internal_id'} = $mo->{'id'};                     # Key to delete message
-	$mo->{'id'}          = $mo->{'message_id'};             # UUID message id
-	$mo->{'text'}        = conv_hex_str( $mo->{'body'} );
+	$mo->{'internal_id'} = $mo->{'id'};            # Key to delete message
+	$mo->{'id'}          = $mo->{'message_id'};    # UUID message id
+
+	#
+	# DLR stay untouched. MO converts from URLEncoded str to given coding.
+	#
+	if ( $mo->{'msg_type'} eq 'MO' ) {
+
+		$mo->{'text'} = $this->_convert_mo( $mo->{'body'}, $mo->{'coding'} );
+
+	} else {
+
+		$mo->{'text'} = $mo->{'body'};
+
+	}
 
 	return $mo;
-}
+} ## end sub _validate_mo
+
+=item B<_convert_mo> 
+
+Waits for URLEncoded string as first parameter and message coding (0..3) as second parameter. 
+In case of coding eq 1 or 3 (bin, latin1) just urldecoding message.
+In case of coding eq 0 or 2 (gsm0338,ucs2) try to convert it to given coding.
+Returns: message body in given coding. 
+
+=cut 
+
+sub _convert_mo {
+	my ( $this, $srcstr, $coding ) = @_;
+
+	my @smpp_encoding = ( 'gsm0338', 'binary', 'ucs2-be', 'latin1' );
+	my $dststr        = $srcstr;
+
+	# First of all try to URL decode string.
+	if ( defined( $this->{conf}->{'mo'}->{'body_translate'}->{'urldecode'} ) ) {
+		if ( $this->{conf}->{'mo'}->{'body_translate'}->{'urldecode'} =~ /yes/i ) {
+			$dststr = conv_uri_str($srcstr);
+		}
+	}
+
+	if ( defined( $this->{conf}->{'mo'}->{'body_translate'} ) ) {
+		# Body translate config found
+		if ( defined( $this->{conf}->{'mo'}->{'body_translate'}->{$coding} ) ) {
+			$dststr = str_recode(
+				$dststr,
+				$this->{conf}->{'mo'}->{'body_translate'}->{$coding},
+				$smpp_encoding[$coding]
+			);
+		}
+	} else {
+		# Do it by default
+		if ( $coding == 0 ) {
+			$dststr = str_recode( $dststr, 'utf8', 'gsm0338' );
+		}
+		if ( $coding == 2 ) {
+			$dststr = str_recode( $dststr, 'UTF-16BE', 'ucs2-be' );
+		}
+	}
+
+	return $dststr;
+
+} ## end sub _convert_mo
 
 sub _extra_decode {
 
@@ -208,19 +272,19 @@ sub _extra_decode {
 	undef $mo->{'extra'};
 
 	foreach my $parameter ( keys %$extra ) {
-		if ( $parameter =~ /message_state/i ) { 
-			$mo->{$parameter} = pack ("c",$extra->{$parameter});
+		if ( $parameter =~ /message_state/i ) {
+			$mo->{$parameter} = pack( "c", $extra->{$parameter} );
 			next;
 		}
-		if ( $parameter =~ /receipted_message_id/i ) { 
-			$mo->{$parameter} = $extra->{$parameter} . chr(0);  
-			next; 
+		if ( $parameter =~ /receipted_message_id/i ) {
+			$mo->{$parameter} = $extra->{$parameter} . chr(0);
+			next;
 		}
 		$mo->{$parameter} = $extra->{$parameter};
 	}
 	return $mo;
 
-}
+} ## end sub _extra_decode
 
 sub _delete_mo {
 	my ( $this, $mo_id ) = @_;

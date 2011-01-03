@@ -1,19 +1,23 @@
 #===============================================================================
 #
-#         FILE:  SMSTradeOutQ.pm
+#         FILE:  SMSTradeInQ.pm
 #
-#  DESCRIPTION:  Plugin for send Mobile Originated Messages to SMPPServerV2
+#  DESCRIPTION:  SMPPServer plugin. Inserts received SMS via SMPP to database.
+#             :  Body text converted to URLEncoded UTF-8 charset.
+#             :  Latin1 will be just urlencoded
+#             :  Binary will be just urlencoded
 #
 #        NOTES:  ---
 #       AUTHOR:  Alex Radetsky (Rad), <rad@rad.kiev.ua>
 #      COMPANY:  Net.Style
 #      VERSION:  1.0
 #      CREATED:  24.08.10 17:14:18 EEST
+#  LAST MODIFY:  27.12.10 around 15:10
 #===============================================================================
 
 =head1 NAME
 
-NetSDS::
+NetSDS::App::SMSTradeInQ
 
 =head1 SYNOPSIS
 
@@ -21,7 +25,8 @@ NetSDS::
 
 =head1 DESCRIPTION
 
-C<NetSDS> module contains superclass all other classes should be inherited from.
+C<NetSDS> SMPPServer plugin. Inserts received SMS via SMPP to database.
+Body text converted to URLEncoded UTF-8 charset.
 
 =cut
 
@@ -38,6 +43,8 @@ use Time::HiRes qw(usleep);
 use Data::Dumper;
 
 use NetSDS::Util::Convert;
+use NetSDS::Util::String;
+
 use JSON;
 
 use base qw(NetSDS::App);
@@ -84,7 +91,7 @@ sub new {
 
 =over
 
-=item B<user(...)> - object method
+=item B<run(...)> - object method
 
 =cut
 
@@ -96,7 +103,6 @@ sub run {
 
 	my ( $this, %params ) = @_;
 
-	#  $this->mk_accessors('msgdbh');
 	$this->_connect_db;
 
 	my $mtq_socket = IO::Socket::INET->new(
@@ -114,24 +120,27 @@ sub run {
 
 	$mtq_socket->autoflush(1);
 
-	# here is the database read cycle
-
+	# Waiting for every JSON-encoded line.
 	while (1) {
 		next unless my $connected = $mtq_socket->accept;
 		$this->speak("[$$] SMSTradeInQ Something connected.");
+		$this->log( "info", "SMSTradeInQ accept connect." );
+
 		while (1) {
 			my $recv_buf = $connected->getline;
 			chomp $recv_buf;
-			my $mt = from_json( conv_base64_str($recv_buf), { utf8 => 1 } );
+
+			my $mt  = from_json( conv_base64_str($recv_buf), { utf8 => 1 } );
 			my $res = $this->_put_mt($mt);
-			unless ( defined ( $res ) ) { 
-				$connected->print("ERROR\n"); # Message was not saved
+
+			unless ( defined($res) ) {
+				$connected->print("ERROR\n");    # Message was not saved
 			} else {
-				$connected->print("OK\n"); # All OK
+				$connected->print("OK\n");       # All OK
 			}
 		}
 		close $connected;
-	}
+	} ## end while (1)
 
 } ## end sub run
 
@@ -150,6 +159,7 @@ sub _put_mt {
 	}
 
 	$mt = $this->_validate_mt($mt);
+	$mt = $this->_convert_mt($mt);
 
 	unless (
 		defined(
@@ -197,14 +207,58 @@ sub _validate_mt {
 		$mt->{'esme_id'} = 0;    # WRONG! Error happens if we use this code.
 	}
 
-	#	$mt->{'message_id'} = $mt->{'id'};     # Received from SMPPD MessageID as ID
-	#	$mt->{'body'}       = $mt->{'ud'};
-	#	$mt->{'src_addr'}   = $mt->{'from'};
-	#	$mt->{'dst_addr'}   = $mt->{'to'};
-	#	$mt->{'coding'} =  $mt->{'coding_integer'};
-
 	return $mt;
 }
+
+=item B<_convert2utf8> 
+ 
+   Converts message body from GSM0338 or UCS2-BE to UTF-8 URL Encoded string 
+   Binary just urlencoded. 
+   Latin1 URLencoded too.
+
+=cut 
+
+sub _convert_mt {
+
+	my ( $this, $msg ) = @_;
+
+	my $str           = $msg->{'body'};
+	my $coding        = $msg->{'coding'};
+	my $dststr        = $str;
+	my @smpp_encoding = ( 'gsm0338', 'binary', 'ucs2-be', 'latin1' );
+
+	if ( defined( $this->{conf}->{'mt'}->{'body_translate'} ) ) {
+		# Body translate config found.
+		if ( defined( $this->{conf}->{'mt'}->{'body_translate'}->{$coding} ) ) {
+			$dststr = str_recode(
+				$str,
+				$smpp_encoding[$coding],
+				$this->{conf}->{'mt'}->{'body_translate'}->{$coding}
+			);
+		}
+	} else {
+		# Do it by default
+
+		if ( $coding == 0 ) {
+			$dststr = str_recode( $str, 'gsm0338', 'utf8' );
+		}
+		if ( $coding == 2 ) {
+			$dststr = str_recode( $str, 'ucs2-be', 'UTF-16BE' );
+		}
+	}
+	
+	# URLEncode if we need. 
+ 
+	if ( defined ( $this->{conf}->{'mt'}->{'body_translate'}->{'urlencode'} ) ) { 
+		if ( $this->{conf}->{'mt'}->{'body_translate'}->{'urlencode'} =~ /yes/i ) { 
+			$dststr = conv_str_uri($dststr);
+		}
+	}
+
+	$msg->{'body'} = $dststr; 
+	return $msg;
+
+} ## end sub _convert_mt
 
 sub _connect_db {
 

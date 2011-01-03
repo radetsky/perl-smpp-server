@@ -82,8 +82,9 @@ use constant cmd_tab => {
 	0x80000015 => 'enquire_link_resp',
 };
 
-my @CHILDREN = array();
-my $ESME     = undef;
+my @CHILDREN        = array();
+my $ESME            = undef;
+my $LOCAL_SYSTEM_ID = NetSDS::App::SMPP::SYSTEM_NAME;
 
 sub initialize {
 
@@ -269,6 +270,11 @@ sub start {
 	$this->shm->store( encode_json($list) );
 	$this->shm->unlock;
 
+	# Fill the Local-system-id value
+	if ( defined( $this->conf->{'smpp'}->{'local_system_id'} ) ) {
+		$LOCAL_SYSTEM_ID = $this->conf->{'smpp'}->{'local_system_id'};
+	}
+
 } ## end sub start
 
 sub _auth_esme {
@@ -373,21 +379,21 @@ sub _auth_esme {
 			# else - system incorrect
 			$this->_edr_write(
 				{
-					Event     => 'Authentication',
-					ESME      => $login,
-					Status    => 'FAIL',
-					Addr_Port => $addr_port,
-					RespStatus    => 0x0E,
+					Event      => 'Authentication',
+					ESME       => $login,
+					Status     => 'FAIL',
+					Addr_Port  => $addr_port,
+					RespStatus => 0x0E,
 				}
 			);
 		} else {
 			$this->_edr_write(
 				{
-					Event     => 'Authentication',
-					ESME      => $login,
-					Status    => 'FAIL',
-					Addr_Port => $addr_port,
-					RespStatus    => 0x0F,
+					Event      => 'Authentication',
+					ESME       => $login,
+					Status     => 'FAIL',
+					Addr_Port  => $addr_port,
+					RespStatus => 0x0F,
 				}
 			);
 		}
@@ -896,6 +902,8 @@ sub cmd_submit_sm {
 		#
 		my $data_coding = $pdu->{data_coding};
 
+		$this->log( "warning", sprintf( "Data coding: %b ", $data_coding ) ) if ( $this->{debug} );
+
 		# Check if message_class is present
 		if ( ( $data_coding & 0b00010000 ) eq 0b00010000 ) {
 			$mclass = $data_coding & 0b00000011;
@@ -904,9 +912,22 @@ sub cmd_submit_sm {
 		$queue_msg->{mclass} = $mclass;
 
 		# Determine coding
-		my $coding = ( $data_coding & 0b00001100 ) >> 2;
-		#$queue_msg->{coding_integer} = $coding;
+		# Part.1: is this Latin1 (5.2.19 in SMPP v.3.4. spec. 0b00000011)
+		#
+		my $coding = 0;
+		if ( ( $data_coding & 0b00000011 ) eq 0b00000011 ) {
+			$coding = 3;    # Latin1 we are save in Database as 0b0011 ;)
+		} else {
+			$coding = ( $data_coding & 0b00001100 ) >> 2;
+		}
 
+		if ( $coding > 3 ) {
+			$resp_status = 0x45;    # ESME_RSUBMITFAIL
+			$this->log( "warning", "Unknown coding here. '$coding'" );
+			goto SUBMIT_SM_RESP;
+		}
+
+		# Put it to message structure
 		$queue_msg->{coding} = $coding;
 
 		# Determine UDHI state
@@ -921,7 +942,6 @@ sub cmd_submit_sm {
 		# Process SM body (UD and UDH)
 		#
 		my $msg_text = $pdu->{short_message};
-
 		# If have UDH, get if from message
 		my $udh = undef;
 		if ($udhi) {
@@ -933,8 +953,8 @@ sub cmd_submit_sm {
 			$queue_msg->{udh} = conv_str_hex($udh);
 		}
 
-		# Encode User Data (UD)
-		$queue_msg->{body} = conv_str_hex($msg_text);
+		# Put User Data (UD) to message structure
+		$queue_msg->{body} = $msg_text;
 
 		# Check if need DLR for message
 		if ( $pdu->{registered_delivery} ) {
@@ -985,6 +1005,8 @@ sub cmd_submit_sm {
 	} else {
 		$resp_status = 0x45;        # ESME_RSUBMITFAIL
 	}
+
+	SUBMIT_SM_RESP:
 
 	if ( $resp_status != 0x00 ) {
 
@@ -1206,7 +1228,7 @@ sub cmd_bind_transceiver {
 			my $resp = $hdl->{smpp}->bind_transceiver_resp(
 				seq       => $pdu->{seq},
 				status    => $resp_status,
-				system_id => NetSDS::App::SMPP::SYSTEM_NAME,
+				system_id => $LOCAL_SYSTEM_ID,
 			);
 
 			# Close socket
@@ -1241,8 +1263,8 @@ sub cmd_bind_transceiver {
 
 	my $resp = $hdl->{smpp}->bind_transceiver_resp(
 		seq       => $pdu->{seq},
-		status    => $resp_status,                     # ESME_ROK
-		system_id => NetSDS::App::SMPP::SYSTEM_NAME,
+		status    => $resp_status,       # ESME_ROK
+		system_id => $LOCAL_SYSTEM_ID,
 	);
 
 } ## end sub cmd_bind_transceiver
@@ -1304,8 +1326,8 @@ sub cmd_bind_transmitter {
 			$resp_status = 0x0000000E;    # ESME_RINVPASWD
 			my $resp = $hdl->{smpp}->bind_transmitter_resp(
 				seq       => $pdu->{seq},
-				status    => $resp_status,                     # ESME_RINVPASWD
-				system_id => NetSDS::App::SMPP::SYSTEM_NAME,
+				status    => $resp_status,       # ESME_RINVPASWD
+				system_id => $LOCAL_SYSTEM_ID,
 			);
 			# Close socket
 			# Remove socket from select()
@@ -1338,8 +1360,8 @@ sub cmd_bind_transmitter {
 
 	my $resp = $hdl->{smpp}->bind_transmitter_resp(
 		seq       => $pdu->{seq},
-		status    => $resp_status,                     # ESME_ROK
-		system_id => NetSDS::App::SMPP::SYSTEM_NAME,
+		status    => $resp_status,       # ESME_ROK
+		system_id => $LOCAL_SYSTEM_ID,
 	);
 
 } ## end sub cmd_bind_transmitter
@@ -1400,8 +1422,8 @@ sub cmd_bind_receiver {
 
 			my $resp = $hdl->{smpp}->bind_receiver_resp(
 				seq       => $pdu->{seq},
-				status    => $resp_status,                     # ESME_RINVPASWD
-				system_id => NetSDS::App::SMPP::SYSTEM_NAME,
+				status    => $resp_status,       # ESME_RINVPASWD
+				system_id => $LOCAL_SYSTEM_ID,
 			);
 
 			# Close socket
@@ -1434,8 +1456,8 @@ sub cmd_bind_receiver {
 
 	my $resp = $hdl->{smpp}->bind_receiver_resp(
 		seq       => $pdu->{seq},
-		status    => $resp_status,                     # ESME_ROK
-		system_id => NetSDS::App::SMPP::SYSTEM_NAME,
+		status    => $resp_status,       # ESME_ROK
+		system_id => $LOCAL_SYSTEM_ID,
 	);
 
 } ## end sub cmd_bind_receiver
@@ -1521,14 +1543,20 @@ sub _deliver_sm {
 		my $dest_addr_npi    = 0x01;
 		my $destination_addr = $mo->{dst_addr};
 		my $msg_text         = $mo->{text};
-		my $data_coding      = $mo->{coding};
+
+		# Set right data_coding field.
+
+		my $data_coding = $mo->{coding};
+		if ( $data_coding < 3 ) {
+			$data_coding = ( $data_coding << 2 ) & 0b00001100;
+		}
 
 		my $system_id = $hdl->{system_id};
 		$this->log( "info", "Deliver SM from '$source_addr' to '$destination_addr' via '$system_id'" );
 		$this->log( "info", "MO Dump: " . Dumper($mo) );
 
 		# Send deliver_sm
-		if ( ( $esm_class == 4 )
+		if (    ( $esm_class == 4 )
 			and ( defined( $mo->{message_state} ) )
 			and ( defined( $mo->{receipted_message_id} ) ) )
 		{    # DLR
