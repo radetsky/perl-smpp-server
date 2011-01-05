@@ -51,6 +51,7 @@ use constant MOQ_SOCK => "127.0.0.1:9999";    # From Database to SMPPD
 use constant MYSQL_DSN    => 'DBI:mysql:database=mydb;host=192.168.1.53';
 use constant MYSQL_USER   => 'netstyle';
 use constant MYSQL_SECRET => '';
+use constant MYSQL_TABLE  => 'smppd_messages';
 
 use version; our $VERSION = "0.01";
 our @EXPORT_OK = qw();
@@ -289,7 +290,12 @@ sub _extra_decode {
 sub _delete_mo {
 	my ( $this, $mo_id ) = @_;
 
-	$this->msgdbh->do("delete from messages where id=$mo_id");
+	my $table = MYSQL_TABLE;
+	if ( defined( $this->{conf}->{'out_queue'}->{'table'} ) ) {
+		$table = $this->{conf}->{'out_queue'}->{'table'};
+	}
+
+	$this->msgdbh->do( "delete from " . $table . " where id=$mo_id" );
 
 }
 
@@ -306,7 +312,6 @@ sub _connect_db {
 		$user   = $this->{conf}->{'out_queue'}->{'db-user'};
 		$passwd = $this->{conf}->{'out_queue'}->{'db-password'};
 	}
-
 	while (1) {
 		# If DBMS isn' t accessible - try reconnect
 
@@ -329,6 +334,11 @@ sub _get_mo {
 
 	my ( $this, @params ) = @_;
 	$this->_connect_db;
+
+	my $table = MYSQL_TABLE;
+	if ( defined( $this->{conf}->{'out_queue'}->{'table'} ) ) {
+		$table = $this->{conf}->{'out_queue'}->{'table'};
+	}
 
 	my $query = undef;
 	my $res   = {};
@@ -353,7 +363,7 @@ sub _get_mo {
 			my $esme_id   = $list->{$login}->{'esme_id'};
 
 			if ( ( $mode eq 'transciever' ) or ( $mode eq 'receiver' ) ) {
-				$query = "select id,msg_type,esme_id,src_addr,dst_addr,body,coding,udh,mwi,mclass,validity,deferred,message_id,registered_delivery,service_type,extra from messages where msg_type='MO' or msg_type='DLR' and esme_id = $esme_id order by id limit $bandwidth";
+				$query = "select id,msg_type,esme_id,src_addr,dst_addr,body,coding,udh,mwi,mclass,validity,deferred,message_id,registered_delivery,service_type,extra from " . $table . " where msg_type='MO' or msg_type='DLR' and esme_id = $esme_id order by id limit $bandwidth";
 				$this->log( "debug", "MO-DLR query: $query" ) if ( $this->debug );
 				my $res_esme = $this->msgdbh->selectall_hashref( $query, "id" );
 				$res = { %$res, %$res_esme };

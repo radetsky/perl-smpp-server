@@ -30,7 +30,6 @@ SMPPServerV2->run(
 	has_conf    => 1,
 	debug       => undef,
 	conf_file   => "./smppserver.conf",
-	#	edr_file    => "./log/events.log",
 );
 
 1;
@@ -56,6 +55,7 @@ use DBI;
 use Time::HiRes qw(usleep);
 use Data::Dumper;
 use POSIX qw(floor);
+
 
 # SMPP PDU command_id table
 use constant cmd_tab => {
@@ -128,11 +128,6 @@ sub initialize {
 
 	} ## end if ( $this->{has_conf})
 
-	# Initialize EDR writer
-	if ( defined( $this->{conf}->{'event_log'}->{'edr_file'} ) ) {
-		$this->{edr_writer} = NetSDS::EDR->new( filename => $this->{conf}->{'event_log'}->{'edr_file'} );
-	}
-
 	# Daemonize, if needed
 	if ( $this->daemon() ) {
 		$this->speak("[$$] Daemonize, switch verbosity to false.");
@@ -199,18 +194,58 @@ sub initialize {
 	# Initialize SHM area
 	$this->_init_shm();
 
+	$this->_edr_init(); 
+
 } ## end sub initialize
 
+sub _edr_init { 
+	my $this = shift; 
+	# Initialize EDR writer
+
+	if ( defined( $this->{conf}->{'edr'}->{'type'} ) ) {
+		my $edr_type = $this->{conf}->{'edr'}->{'type'};
+		if ( $edr_type =~ /database/i ) {
+			my $edr = NetSDS::EDR->new (
+				type     => 'database',
+				dsn      => $this->{conf}->{'edr'}->{'dsn'},
+				user     => $this->{conf}->{'edr'}->{'db-user'},
+				password => $this->{conf}->{'edr'}->{'db-password'},
+				query    => $this->{conf}->{'edr'}->{'query'}
+			);
+			unless ( defined ($edr) ) { 
+				warn Dumper ($edr); 
+				warn Dumper ($this->{conf}->{'edr'}); 
+				die "Can't init EDR"; 
+			}
+			$this->{edr_writer} = $edr; 
+			$this->{'edr_mapping'} = $this->{conf}->{'edr'}->{'mapping'};
+			$this->log( "info", "EDR database writer started." );
+
+		}
+		if ( $edr_type =~ /rawfile/i ) {
+			$this->{edr_writer} = NetSDS::EDR->new(
+				type     => $edr_type,
+				filename => $this->{conf}->{'edr'}->{'filename'}
+			);
+			$this->log( "info", "EDR rawfile writer started." );
+		}
+		if ( $edr_type =~ /syslog/i ) {
+			$this->{edr_writer} = NetSDS::EDR->new(
+				type   => $edr_type,
+				prefix => $this->{conf}->{'edr'}->{'prefix'}
+			);
+			$this->log( "info", "EDR syslog writer started" );
+		}
+
+	} ## end if ( defined( $this->{...
+}
+
 sub _edr_write {
-	my ( $this, $params ) = @_;
+	my $this   = shift;
+	my $record = shift;
+	my $params = $this->{'edr_mapping'};
 
-	unless ( defined( $this->{conf}->{'event_log'}->{'edr_file'} ) ) {
-		return undef;
-	}
-
-	$params->{'timestamp'} = date_now();
-
-	$this->{edr_writer}->write($params);
+	$this->{edr_writer}->write( $record, $params );
 
 }
 
@@ -255,7 +290,7 @@ sub start {
 	my ($this) = @_;
 
 	$this->speak("[$$] Start SMPPServerV2 ");
-	$this->_edr_write( { Event => 'Start Server' } );
+	$this->_edr_write( { event_name => 'Start Server' } );
 
 	# Connect to authentication DBMS
 	$this->mk_accessors('authdbh');
@@ -357,10 +392,11 @@ sub _auth_esme {
 
 		$this->_edr_write(
 			{
-				Event     => 'Authentication',
-				ESME      => $system_id,
-				Status    => 'OK',
-				Addr_Port => $addr_port,
+				event_name    => 'Authentication',
+				system_id     => $system_id,
+				Status        => 'OK',
+				cmd_status    => 0x0,
+				src_addr_port => $addr_port,
 			}
 		);
 
@@ -379,21 +415,21 @@ sub _auth_esme {
 			# else - system incorrect
 			$this->_edr_write(
 				{
-					Event      => 'Authentication',
-					ESME       => $login,
-					Status     => 'FAIL',
-					Addr_Port  => $addr_port,
-					RespStatus => 0x0E,
+					event_name    => 'Authentication',
+					system_id     => $login,
+					Status        => 'FAIL',
+					src_addr_port => $addr_port,
+					cmd_status    => 0x0E,
 				}
 			);
 		} else {
 			$this->_edr_write(
 				{
-					Event      => 'Authentication',
-					ESME       => $login,
-					Status     => 'FAIL',
-					Addr_Port  => $addr_port,
-					RespStatus => 0x0F,
+					event_name    => 'Authentication',
+					system_id     => $login,
+					Status        => 'FAIL',
+					src_addr_port => $addr_port,
+					cmd_status    => 0x0F,
 				}
 			);
 		}
@@ -711,10 +747,10 @@ sub _authorize_submit {
 	}
 	$this->_edr_write(
 		{
-			Event     => 'Submit',
-			ESME      => $login,
-			Status    => 'FAIL',
-			Addr_Port => $src,
+			event_name    => 'Submit',
+			system_id     => $login,
+			Status        => 'FAIL',
+			src_addr_port => $src,
 		}
 	);
 
@@ -790,10 +826,10 @@ sub _throttling {
 		$this->speak("[$$] Deny send SMS from $login for GLOBAL THROTTLING reason.");
 		$this->_edr_write(
 			{
-				Event  => 'Submit',
-				ESME   => $login,
-				Status => 'FAIL',
-				Reason => 'GLOBAL THROTTLING'
+				event_name => 'Submit',
+				system_id  => $login,
+				Status     => 'FAIL',
+				Reason     => 'GLOBAL THROTTLING'
 			}
 		);
 
@@ -806,10 +842,10 @@ sub _throttling {
 		$this->speak("[$$] Deny send SMS from $login for THROTTLING reason.");
 		$this->_edr_write(
 			{
-				Event  => 'Submit',
-				ESME   => $login,
-				Status => 'FAIL',
-				Reason => 'LOGIN THROTTLING'
+				event_name => 'Submit',
+				system_id  => $login,
+				Status     => 'FAIL',
+				Reason     => 'LOGIN THROTTLING'
 			}
 		);
 
@@ -862,10 +898,18 @@ sub cmd_submit_sm {
 				message_id => $message_id,
 				async      => 1,
 			);
+			$this->_edr_write(
+				{
+					event_name    => 'cmd_submit_sm',
+					cmd_id        => 0x04,
+					cmd_status    => $resp_status,
+					message_id    => $message_id,
+					seq           => $pdu->{seq},
+					src_addr_port => $hdl->{id}
+				}
+			);
 
-			return;
-
-		}
+		} ## end unless ( defined( $this->_throttling...
 
 		# Create empty message
 		my $queue_msg = {
@@ -1015,16 +1059,17 @@ sub cmd_submit_sm {
 
 		$this->_edr_write(
 			{
-				Event          => 'Submit',
-				ESME           => $hdl->{system_id},
-				Status         => 'FAIL',
-				ResponseStatus => $resp_status,
-				MessageId      => $message_id,
-				PduSeq         => $pdu->{seq},
-				From           => $pdu->{source_addr},
-				To             => $pdu->{destination_addr},
-				Text           => $pdu->{short_message},
-				Addr_Port      => $hdl->{id},
+				event_name    => 'cmd_submit_sm',
+				system_id     => $hdl->{system_id},
+				Status        => 'FAIL',
+				cmd_id        => 0x04,
+				cmd_status    => $resp_status,
+				message_id    => $message_id,
+				seq           => $pdu->{seq},
+				src           => $pdu->{source_addr},
+				dst           => $pdu->{destination_addr},
+				text          => $pdu->{short_message},
+				src_addr_port => $hdl->{id},
 			}
 		);
 
@@ -1032,16 +1077,17 @@ sub cmd_submit_sm {
 	if ( $resp_status == 0x00 ) {
 		$this->_edr_write(
 			{
-				Event          => 'Submit',
-				ESME           => $hdl->{system_id},
-				Status         => 'OK',
-				ResponseStatus => $resp_status,
-				MessageId      => $message_id,
-				PduSeq         => $pdu->{seq},
-				From           => $pdu->{source_addr},
-				To             => $pdu->{destination_addr},
-				Text           => $pdu->{short_message},
-				Addr_Port      => $hdl->{id},
+				event_name    => 'Submit',
+				system_id     => $hdl->{system_id},
+				Status        => 'OK',
+				cmd_id        => 0x04,
+				cmd_status    => $resp_status,
+				message_id    => $message_id,
+				seq           => $pdu->{seq},
+				src           => $pdu->{source_addr},
+				dst           => $pdu->{destination_addr},
+				text          => $pdu->{short_message},
+				src_addr_port => $hdl->{id},
 			}
 		);
 		$this->_increase_received( $hdl->{system_id} );
@@ -1101,9 +1147,11 @@ sub cmd_unbind {
 
 	$this->_edr_write(
 		{
-			Event     => 'Unbind',
-			ESME      => $hdl->{system_id},
-			Addr_Port => $hdl->{id},
+			event_name    => 'cmd_unbind',
+			system_id     => $hdl->{system_id},
+			src_addr_port => $hdl->{id},
+			cmd_status    => 0x00,
+			cmd_id        => 0x06,
 		}
 	);
 
@@ -1253,11 +1301,12 @@ sub cmd_bind_transceiver {
 
 	$this->_edr_write(
 		{
-			Event      => 'Bind Transciever',
-			ESME       => $login,
-			Status     => $status,
-			RespStatus => $resp_status,
-			Addr_Port  => $hdl->{id},
+			event_name    => 'cmd_bind_transciever',
+			system_id     => $login,
+			Status        => $status,
+			cmd_id        => 0x09,
+			cmd_status    => $resp_status,
+			src_addr_port => $hdl->{id},
 		}
 	);
 
@@ -1349,11 +1398,12 @@ sub cmd_bind_transmitter {
 	}
 	$this->_edr_write(
 		{
-			Event      => 'Bind Transmitter',
-			ESME       => $login,
-			Status     => $status,
-			RespStatus => $resp_status,
-			Addr_Port  => $hdl->{id},
+			event_name    => 'cmd_bind_transmitter',
+			system_id     => $login,
+			Status        => $status,
+			cmd_id        => 0x02,
+			cmd_status    => $resp_status,
+			src_addr_port => $hdl->{id},
 
 		}
 	);
@@ -1446,11 +1496,12 @@ sub cmd_bind_receiver {
 	}
 	$this->_edr_write(
 		{
-			Event      => 'Bind Receiver',
-			ESME       => $login,
-			Status     => $status,
-			RespStatus => $resp_status,
-			Addr_Port  => $hdl->{id},
+			event_name    => 'cmd_bind_receiver',
+			system_id     => $login,
+			Status        => $status,
+			cmd_id        => 0x01,
+			cmd_status    => $resp_status,
+			src_addr_port => $hdl->{id},
 		}
 	);
 
@@ -1594,9 +1645,16 @@ sub _deliver_sm {
 		$hdl->{out_seq}++;
 		$this->_edr_write(
 			{
-				Event  => 'Deliver',
-				ESME   => $hdl->{system_id},
-				Status => 'OK'
+				event_name    => 'cmd_deliver_sm',
+				cmd_id        => 0x05,
+				cmd_status    => 0x00,
+				system_id     => $hdl->{system_id},
+				Status        => 'OK',
+				src_addr_port => $hdl->{id},
+				src           => $source_addr,
+				dst           => $destination_addr,
+				text          => $msg_text,
+				message_id    => $mo->{id},
 			}
 		);
 

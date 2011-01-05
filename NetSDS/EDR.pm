@@ -6,8 +6,10 @@
 #
 #        NOTES:  ---
 #       AUTHOR:  Michael Bochkaryov (Rattler), <misha@rattler.kiev.ua>
+#       AUTHOR:  Alex Radetsky (rad), <rad@rad.kiev.ua>
 #      COMPANY:  Net.Style
 #      CREATED:  28.08.2009 16:43:02 EEST
+#     MODIFIED:  03.01.2011
 #===============================================================================
 
 =head1 NAME
@@ -52,10 +54,16 @@ use strict;
 use warnings;
 
 use JSON;
+use Data::Dumper; 
 use NetSDS::Util::DateTime;
 use base 'NetSDS::Class::Abstract';
 
-use version; our $VERSION = '1.400';
+use NetSDS::EDR::Database; 
+use NetSDS::EDR::Syslog; 
+use NetSDS::EDR::Rawfile;  
+
+use version;
+our $VERSION = '2.000';
 
 #===============================================================================
 #
@@ -68,13 +76,29 @@ use version; our $VERSION = '1.400';
 
 Parameters:
 
-* filename - EDR file name
+* type - EDR type one of 'database','syslog','rawfile';
+* filename - EDR file name for rawfile 
+* prefix - 'EDR' for syslog 
+* dsn, db-user,db-password, table for database 
 
 Example:
 
     my $edr = NetSDS::EDR->new(
+	    type => 'rawfile',
 		filename => '/mnt/stat/ivr.dat',
 	);
+
+	my $edr = NetSDS::EDR->new( 
+	    type => 'syslog',
+		prefix => 'EDR:'
+	);
+
+	my $edr = NetSDS::EDR->new( 
+	    type => 'database', 
+		dsn => 'DBI:mysql:database=mydb;host=192.168.1.53',
+		user => 'rad',
+		password => 'secret',
+	); 
 
 =cut
 
@@ -88,22 +112,51 @@ sub new {
 	# Create JSON encoder for EDR data processing
 	$self->{encoder} = JSON->new();
 
-	# Initialize file to write
-	if ( $params{filename} ) {
-		$self->{edr_file} = $params{filename};
-	} else {
-		return $class->error("Absent mandatory parameter 'filename'");
+	# Define engine to use for EDR
+	$self->{engine} = undef;
+
+	unless ( defined( $params{type} ) ) {
+		return $class->error("Mandatory parameter 'type' is required!");
+	}
+
+	if ( $params{type} =~ /database/i ) {
+		# Checking for parameters for database engine
+		unless ( ( defined( $params{dsn} ) )
+			or ( defined( $params{user} ) )
+			or ( defined( $params{password} ) ) )
+		{
+			return $class->error("For database engine parameters is : dsn, user, password, query.");
+		}
+		$self->{engine} = NetSDS::EDR::Database->new(%params);
+	}
+
+	if ( $params{type} =~ /syslog/i ) {
+		# Check for prefix
+		unless ( defined( $params{prefix} ) ) {
+			return $class->error("For syslog please define 'prefix' parameter.");
+		}
+		$self->{engine} = NetSDS::EDR::Syslog->new( prefix => $params{prefix} );
+	}
+
+	if ( $params{type} =~ /rawfile/i ) {
+		unless ( defined( $params{filename} ) ) {
+			return $class->error("For rawfile please define 'filename' parameter.");
+		}
+		$self->{engine} = NetSDS::EDR::Rawfile->new( filename => $params{filename} );
+	}
+
+	unless ( defined( $self->{engine} ) ) {
+		return $class->error("Can't init engine class.");
 	}
 
 	return $self;
 
-}
+} ## end sub new
 
 #***********************************************************************
 
-=item B<write($rec1 [,$rec2 [...,$recN]])> - write EDR to file
+=item B<write($rec1 [,$rec2 [...,$recN]])> - write EDR to inited engine 
 
-This methods converts records to JSON and write to file.
 Each record writing to one separate string.
 
 Example:
@@ -115,17 +168,16 @@ Example:
 #-----------------------------------------------------------------------
 sub write {
 
-	my ( $self, @records ) = @_;
+	#my ( $self, @records, $params ) = @_;
 
-	open EDRF, ">>$self->{edr_file}";
+	my $self = shift; 
+	my @records = shift; 
+	my $params = shift; 
 
-	# Write records - one record per line
-	foreach my $rec (@records) {
-		my $edr_json = $self->{encoder}->encode($rec);
-		print EDRF "$edr_json\n";
-	}
+	#warn "write records: " . Dumper (\@records); 
+	#warn "write params : " . Dumper ($params); 
 
-	close EDRF;
+	$self->{engine}->write(@records, $params);
 
 }
 

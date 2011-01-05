@@ -54,6 +54,7 @@ use constant MTQ_SOCK => "127.0.0.1:9998";    # From Database to SMPPD
 use constant MYSQL_DSN    => 'DBI:mysql:database=mydb1;host=192.168.1.53';
 use constant MYSQL_USER   => 'netstyle';
 use constant MYSQL_SECRET => '';
+use constant MYSQL_TABLE  => 'smppd_messages';
 
 use version; our $VERSION = "0.01";
 our @EXPORT_OK = qw();
@@ -246,16 +247,16 @@ sub _convert_mt {
 			$dststr = str_recode( $str, 'ucs2-be', 'UTF-16BE' );
 		}
 	}
-	
-	# URLEncode if we need. 
- 
-	if ( defined ( $this->{conf}->{'mt'}->{'body_translate'}->{'urlencode'} ) ) { 
-		if ( $this->{conf}->{'mt'}->{'body_translate'}->{'urlencode'} =~ /yes/i ) { 
+
+	# URLEncode if we need.
+
+	if ( defined( $this->{conf}->{'mt'}->{'body_translate'}->{'urlencode'} ) ) {
+		if ( $this->{conf}->{'mt'}->{'body_translate'}->{'urlencode'} =~ /yes/i ) {
 			$dststr = conv_str_uri($dststr);
 		}
 	}
 
-	$msg->{'body'} = $dststr; 
+	$msg->{'body'} = $dststr;
 	return $msg;
 
 } ## end sub _convert_mt
@@ -267,11 +268,13 @@ sub _connect_db {
 	my $dsn    = MYSQL_DSN;
 	my $user   = MYSQL_USER;
 	my $passwd = MYSQL_SECRET;
+	my $table  = MYSQL_TABLE;
 
 	if ( defined( $this->{conf}->{'in_queue'}->{'dsn'} ) ) {
 		$dsn    = $this->{conf}->{'in_queue'}->{'dsn'};
 		$user   = $this->{conf}->{'in_queue'}->{'db-user'};
 		$passwd = $this->{conf}->{'in_queue'}->{'db-password'};
+		$table  = $this->{conf}->{'in_queue'}->{'table'};
 	}
 
 	# If DBMS isn' t accessible - try reconnect
@@ -284,7 +287,7 @@ sub _connect_db {
 			$this->log( "error", "Cant connect to DBMS!" );
 			return undef;
 		}
-		my $sql = "insert into messages ( msg_type, esme_id, src_addr, dst_addr, body, coding, udh, mwi, mclass, message_id, validity, deferred, registered_delivery, service_type, extra, received ) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,? ) ";
+		my $sql = "insert into " . $table . " ( msg_type, esme_id, src_addr, dst_addr, body, coding, udh, mwi, mclass, message_id, validity, deferred, registered_delivery, service_type, extra, received ) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,? ) ";
 		$this->msgsth( $this->msgdbh->prepare_cached($sql) );
 	}
 	return 1;

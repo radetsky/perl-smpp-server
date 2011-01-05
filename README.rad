@@ -38,8 +38,10 @@ Only ./smppserver.conf
 Section <smpp> - for SMPP-server listen parameters; 
 Section <auth> - for Authentication Database access parameters; 
 Section <shm> - do not edit it. 
-auth.query - it's a key for good authentication :-)
-
+auth->query - it's a key for good authentication :-)
+auth->query_system_ud - it's alternative path to find correspondent ESME id if pair login->password does not work.
+This query try to find just system_id to send response "Invalid system-id" but not "Invalid password", if correnspondent 
+system-id will not found. 
 
 <in_query> and <out_query> : no comments; 
 
@@ -241,7 +243,25 @@ The left side of the body_translate section is encoding from/to SMPP data_coding
 
 If urlencode exists end value is yes/YES/YeS/etc final string will be urlencoded before insert to database.
 
- 
+Jan.2011
+----------
++ New configuration parameters: in_queue->table && out_queue->table. 
+With this parameters you may redefine tables that contain MT,MO,DLR messages.
+It may be different also ;-) 
+
+With configuration auth->query and auth->query_system_id you may redefine any authentication schemes.
+Our SMPPD now more flexible. 
+
++ New NetSDS::EDR package. 
+It containts three subclasses that use three different ways to save events data 
+1. Database 
+2. Syslog 
+3. Rawfile 
+
+Default config uses database. 
+Look in edr.sql 
+
+
 
 
 

@@ -113,7 +113,7 @@ unless ( defined($dbh) ) {
 	die "fail 6: can't connect to database. DSN: '$dsn'\n";
 }
 
-my $sth = $dbh->prepare_cached("insert into messages ( msg_type, esme_id, src_addr, dst_addr, body, coding, udh, mwi, mclass, message_id, validity, deferred, registered_delivery, service_type, extra, received ) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,? ) ");
+my $sth = $dbh->prepare_cached("insert into smppd_messages ( msg_type, esme_id, src_addr, dst_addr, body, coding, udh, mwi, mclass, message_id, validity, deferred, registered_delivery, service_type, extra, received ) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,? ) ");
 $sth->execute( 'MO', 1, '0504139380', 'smppsvrtst.pl', conv_str_hex('bla-bla-bla'), 2, undef, undef, 0, '1010101010101010101', 1440, undef, undef, undef, undef, '2010-08-30 23:59:00' );
 $pdu = $cli->read_pdu();
 warn Dumper($pdu);
