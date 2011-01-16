@@ -47,7 +47,7 @@ unless ( defined($dbh) ) {
 	die "fail: can't connect to database. DSN: '$dsn'\n";
 }
 
-my $sth = $dbh->prepare_cached("insert into messages ( msg_type, esme_id, src_addr, dst_addr, body, coding, udh, mwi, mclass, message_id, validity, deferred, registered_delivery, service_type, extra ) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,? ) ");
+my $sth = $dbh->prepare_cached("insert into smppd_messages ( msg_type, esme_id, src_addr, dst_addr, body, coding, udh, mwi, mclass, message_id, validity, deferred, registered_delivery, service_type, extra ) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,? ) ");
 $sth->execute( 'MO', 3, '0504139380', 'smppsvrtst.pl', $utf8text ,$coding, undef, undef, 0, '1010101010101010101', 1440, undef, undef, undef,undef );
 
 #EOF

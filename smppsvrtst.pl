@@ -116,7 +116,7 @@ unless ( defined($dbh) ) {
 my $sth = $dbh->prepare_cached("insert into smppd_messages ( msg_type, esme_id, src_addr, dst_addr, body, coding, udh, mwi, mclass, message_id, validity, deferred, registered_delivery, service_type, extra, received ) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,? ) ");
 $sth->execute( 'MO', 1, '0504139380', 'smppsvrtst.pl', conv_str_hex('bla-bla-bla'), 2, undef, undef, 0, '1010101010101010101', 1440, undef, undef, undef, undef, '2010-08-30 23:59:00' );
 $pdu = $cli->read_pdu();
-warn Dumper($pdu);
+#warn Dumper($pdu);
 print "ok 6: receive SM\n";
 
 # Test No. 7. Insert 1000 SM to database
@@ -147,7 +147,7 @@ $cli3->unbind();
 $seq = $cli->enquire_link() 
 		or die "Can't send enquire link PDU.\n"; 
 $pdu = $cli->read_pdu(); 
-warn Dumper ($pdu); 
+#warn Dumper ($pdu); 
 
 print "ok 9: send and receive PDU.\n"; 
 
@@ -163,7 +163,7 @@ if ($cli) {
 # Test No. 11: New bind transciever . 
 $seq = $cli2->bind_transceiver( system_id => 'SMSGW', password => 'secret' ) or die;
 $pdu = $cli2->read_pdu() or die;
-warn Dumper ($pdu);
+#warn Dumper ($pdu);
 if ( ( $pdu->{status} == 0x0E) or ($pdu->{status} == 0x0D ) ) {          ## STATUS
 	print "ok 11: can't connect more than 1 time for SMSGW with NULL (default 1) max_connections.\n"; 
 } else { 
@@ -179,7 +179,7 @@ $pdu = $cli->read_pdu() or die;
 if ( $pdu->{status} == 0x00 ) {          ## STATUS
     die "fail 12: SMS submitted with wrong ALPHANUM name\n"; 
 } else {
-	warn Dumper ($pdu); 
+	#warn Dumper ($pdu); 
     print "ok 12: SMS failed from INVALID.\n"; 
 }
 

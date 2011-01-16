@@ -1,6 +1,6 @@
 #===============================================================================
 #
-#         FILE:  SMSTradeInQ.pm
+#         FILE:  SMSTradeInDB.pm
 #
 #  DESCRIPTION:  SMPPServer plugin. Inserts received SMS via SMPP to database.
 #             :  Body text converted to URLEncoded UTF-8 charset.
@@ -17,7 +17,7 @@
 
 =head1 NAME
 
-NetSDS::App::SMSTradeInQ
+NetSDS::App::SMSTradeInDB
 
 =head1 SYNOPSIS
 
@@ -30,33 +30,25 @@ Body text converted to URLEncoded UTF-8 charset.
 
 =cut
 
-package NetSDS::App::SMSTradeInQ;
+package NetSDS::App::SMSTradeInDB;
 
 use 5.8.0;
 use strict;
 use warnings;
 
-use Socket; 
-use IO::Handle;
-
-use Time::HiRes qw(usleep);
 use Data::Dumper;
 
 use NetSDS::Util::Convert;
 use NetSDS::Util::String;
 
-use JSON;
+use base qw(NetSDS::Class::Abstract);
 
-use base qw(NetSDS::App);
-
-use constant MTQ_SOCK => "127.0.0.1:9998";    # From Database to SMPPD
-
-use constant MYSQL_DSN    => 'DBI:mysql:database=mydb1;host=192.168.1.53';
+use constant MYSQL_DSN    => 'DBI:mysql:database=mydb;host=192.168.1.53';
 use constant MYSQL_USER   => 'netstyle';
 use constant MYSQL_SECRET => '';
 use constant MYSQL_TABLE  => 'smppd_messages';
 
-use version; our $VERSION = "0.01";
+use version; our $VERSION = "0.02";
 our @EXPORT_OK = qw();
 
 #===============================================================================
@@ -79,8 +71,7 @@ sub new {
 
 	my $this = $class->SUPER::new();
 
-	close STDIN;
-	close STDOUT;
+	$this->_connect_db();
 
 	return $this;
 
@@ -97,35 +88,8 @@ sub new {
 =cut
 
 #-----------------------------------------------------------------------
-__PACKAGE__->mk_accessors(qw/msgdbh/);
-__PACKAGE__->mk_accessors(qw/msgsth/);
-
-sub run {
-
-	my ( $this, %params ) = @_;
-
-	$this->_connect_db;
-
-	# Waiting for every JSON-encoded line.
-	
-	my $socket = $this->{server_socket}; 
-		while (1) {
-			my $recv_buf = <$socket>; 
-
-			chomp $recv_buf;
-
-			my $mt  = from_json( conv_base64_str($recv_buf), { utf8 => 1 } );
-			my $res = $this->_put_mt($mt);
-
-			unless ( defined($res) ) {
-				print $socket "ERROR\n";    # Message was not saved
-			} else {
-				print $socket "OK\n";       # All OK
-			}
-		}
-		
-
-} ## end sub run
+#__PACKAGE__->mk_accessors(qw/msgdbh/);
+#__PACKAGE__->mk_accessors(qw/msgsth/);
 
 =item B<_put_mt> 
 
@@ -137,16 +101,12 @@ sub _put_mt {
 
 	my ( $this, $mt ) = @_;
 
-	unless ( defined( $this->_connect_db() ) ) {
-		return undef;
-	}
-
 	$mt = $this->_validate_mt($mt);
 	$mt = $this->_convert_mt($mt);
 
 	unless (
 		defined(
-			$this->msgsth->execute(
+			$this->{'msgsth'}->execute(
 				$mt->{'msg_type'},
 				$mt->{'esme_id'},
 				$mt->{'src_addr'},
@@ -261,17 +221,19 @@ sub _connect_db {
 
 	# If DBMS isn' t accessible - try reconnect
 
-	if ( !$this->msgdbh or !$this->msgdbh->ping ) {
-		$this->msgdbh( DBI->connect_cached( $dsn, $user, $passwd ) );
-
-		if ( !$this->msgdbh ) {
+	unless ( defined ( $this->{'msgdbh'} ) ) { 
+		$this->{'msgdbh'} = DBI->connect_cached ( $dsn, $user, $passwd ); 
+	} 
+	unless ( $this->{'msgdbh'}->ping ) { 
+		$this->{'msgdbh'} = DBI->connect_cached ( $dsn, $user, $passwd ); 
+	} 
+	if ( !$this->{'msgdbh'} ) {
 			$this->speak("Cant connect to DBMS!");
 			$this->log( "error", "Cant connect to DBMS!" );
 			return undef;
-		}
-		my $sql = "insert into " . $table . " ( msg_type, esme_id, src_addr, dst_addr, body, coding, udh, mwi, mclass, message_id, validity, deferred, registered_delivery, service_type, extra, received ) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,? ) ";
-		$this->msgsth( $this->msgdbh->prepare_cached($sql) );
 	}
+	my $sql = "insert into " . $table . " ( msg_type, esme_id, src_addr, dst_addr, body, coding, udh, mwi, mclass, message_id, validity, deferred, registered_delivery, service_type, extra, received ) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,? ) ";
+	$this->{'msgsth'} = $this->{'msgdbh'}->prepare_cached($sql);
 	return 1;
 
 } ## end sub _connect_db

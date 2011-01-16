@@ -35,6 +35,7 @@ use warnings;
 use base qw(NetSDS::Class::Abstract);
 
 use JSON;
+use Encode; 
 use NetSDS::Util::DateTime;
 use NetSDS::Logger; 
 
@@ -61,7 +62,7 @@ sub new {
 
 	my $this = $class->SUPER::new();
 
-	$this->{encoder} = JSON->new();
+	$this->{encoder} = JSON->new()->utf8(1);
 
 	$this->{logger} = NetSDS::Logger->new( name => $params{prefix} );
 
@@ -88,8 +89,10 @@ sub write {
 	my $params = @_; 
 
 	foreach my $rec (@records) {
+
 		my $edr_json = $this->{encoder}->encode($rec);
 		$this->{logger}->log( "info", $edr_json );
+
 	}
 }
 

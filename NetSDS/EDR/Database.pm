@@ -31,13 +31,16 @@ use strict;
 use warnings;
 
 use DBI; 
-use JSON; 
+use JSON::XS; 
 use base qw(NetSDS::Class::Abstract);
 
 use Data::Dumper; 
 
 use version; our $VERSION = "0.01";
 our @EXPORT_OK = qw();
+
+our @local_cache = ();  
+our $previous_time; 
 
 #===============================================================================
 #
@@ -58,12 +61,14 @@ sub new {
 
 	my $this = $class->SUPER::new();
 	$this->{encoder} = JSON->new();
+	$this->{encoder}->utf8(1); 
 
 	unless ( defined ( $this->_connect_db($params{dsn},$params{user},$params{password}) ) ) { 
 		return $class->error("Can't connect to the database: ".$params{dsn});
 	}
 
 	$this->_prepare_query($params{query}); 
+	$previous_time = time(); 
 
 	return $this;
 
@@ -87,7 +92,7 @@ sub _connect_db {
 	my ( $this, $dsn, $user, $password ) = @_;
 
 	if ( !$this->dbh or !$this->dbh->ping) { 
-		$this->dbh(DBI->connect_cached ($dsn, $user, $password ) ); 
+		$this->dbh ( DBI->connect_cached ($dsn, $user, $password ) ); 
 
 		if (!$this->dbh) { 
 			return undef; 
@@ -136,13 +141,24 @@ sub write {
 			$bind[$num] = $rec->{$item}; 
 		}
 		my $num_userfield = $this->_map('userfield',$mapping);
-		#warn Dumper ($userfield,$num_userfield); 
 		if ( ($num_userfield)  and ( defined ($userfield) ) ) { 
-			$bind[$num_userfield] = $this->{encoder}->encode($userfield);
+			$bind[$num_userfield] = $this->{encoder}->encode ( $userfield );
 		}
 	}
-	#warn Dumper (\@bind);
-	$this->sth->execute(@bind); 
+
+	push @local_cache,[ @bind ]; 
+	# warn "EDR::Database add record to cache."; 
+
+	my $current_time = time(); 
+	my $td = $current_time - $previous_time; 
+	if ( (@local_cache > 2000) or ($td > 2 ) ) { 
+		#warn "EDR::Database flushing cache."; 
+		foreach my $cache_record (@local_cache) { 
+			$this->sth->execute ( @$cache_record ); 
+		}
+		@local_cache = (); 
+	}
+	$previous_time = time(); 
 }
 
 sub _map { 

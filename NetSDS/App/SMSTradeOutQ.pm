@@ -33,8 +33,8 @@ use 5.8.0;
 use strict;
 use warnings;
 
+use Socket;
 use IO::Handle;
-use IO::Socket qw(:DEFAULT :crlf);
 
 use JSON;
 use Time::HiRes qw( usleep );
@@ -124,77 +124,57 @@ sub _init_shm {
 } ## end sub _init_shm
 
 sub run {
-
 	my ( $this, %params ) = @_;
 
 	$this->_connect_db;
 
-	my $moq_socket = IO::Socket::INET->new(
-		LocalAddr => MOQ_SOCK,
-		Type      => SOCK_STREAM,
-		Listen    => 1,
-		ReuseAddr => 1,
-		Proto     => 'tcp',
-	);
-
-	unless ( defined($moq_socket) ) {
-		warn "[$$] SMSTradeOutQ Create socket error : $!\n";
-		die;
-	}
-
-	$moq_socket->autoflush(1);
-
 	# here is the database read cycle
+	my $socket = $this->{server_socket};
 
 	while (1) {
 
-		next unless my $connected = $moq_socket->accept;
-		$this->speak("[$$] SMSTradeOutQ Something connected.");
-		while (1) {
+		unless ( defined( $this->shm ) ) {
+			$this->_init_shm();
+		}
 
-			unless ( defined( $this->shm ) ) {
-				$this->_init_shm();
-			}
+		# Here we will be read database
+		my $queue_msgs = $this->_get_mo;
+		my $count      = keys %$queue_msgs;
 
-			# Here we will be read database
-			my $queue_msgs = $this->_get_mo;
-			my $count      = keys %$queue_msgs;
-
-			if ( $count == 0 ) {    # No more records
-				                    #sleep(500);
-				sleep(1);
-				next;
-			}
-
-			# Read some messages MO and DLR
-			foreach my $msg ( keys %$queue_msgs ) {
-				my $queue_msg = $queue_msgs->{$msg};
-
-				$this->log( 'debug', Dumper($queue_msg) ) if ( $this->{'debug'} );
-
-				$queue_msg = $this->_validate_mo($queue_msg);
-
-				if ( defined( $queue_msg->{'extra'} ) ) {
-					$queue_msg = $this->_extra_decode($queue_msg);
-				}
-
-				my $json_text = to_json( $queue_msg, { ascii => 1, pretty => 1 } );
-
-				# Sending to SMPPd
-				my $res = $connected->print( conv_str_base64($json_text) . "\n" );
-
-				# Дождаться подтверждения того, что сообщение послано.
-				# И только после этого удалить, иначе не удалять.
-
-				my $confirm = $connected->getline;
-				if ( $confirm =~ /OK/ ) {
-					$this->_delete_mo( $queue_msg->{'internal_id'} );
-				}
-			} ## end foreach my $msg ( keys %$queue_msgs)
+		if ( $count == 0 ) {    # No more records
+			                    #sleep(500);
 			sleep(1);
+			next;
+		}
 
-		} ## end while (1)
-		close $connected;
+		# Read some messages MO and DLR
+		foreach my $msg ( keys %$queue_msgs ) {
+			my $queue_msg = $queue_msgs->{$msg};
+
+			$this->log( 'debug', Dumper($queue_msg) ) if ( $this->{'debug'} );
+
+			$queue_msg = $this->_validate_mo($queue_msg);
+
+			if ( defined( $queue_msg->{'extra'} ) ) {
+				$queue_msg = $this->_extra_decode($queue_msg);
+			}
+
+			my $json_text = to_json( $queue_msg, { ascii => 1, pretty => 1 } );
+
+			# Sending to SMPPd
+			my $base64text = conv_str_base64($json_text);
+			my $res = print $socket $base64text . "\n";
+			
+			# Дождаться подтверждения того, что сообщение послано.
+			# И только после этого удалить, иначе не удалять.
+
+			my $confirm = <$socket>;
+			if ( $confirm =~ /OK/ ) {
+				$this->_delete_mo( $queue_msg->{'internal_id'} );
+			}
+		} ## end foreach my $msg ( keys %$queue_msgs)
+		sleep(1);
+
 	} ## end while (1)
 } ## end sub run
 

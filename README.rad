@@ -261,7 +261,7 @@ It containts three subclasses that use three different ways to save events data
 Default config uses database. 
 Look in edr.sql 
 
-
+ATTENTION: if '<edr> type' will be unavailable then event logging will disabled. 
 
 
 

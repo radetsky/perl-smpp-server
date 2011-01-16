@@ -43,19 +43,23 @@ use warnings;
 use base qw(NetSDS::App::SMPPServer);
 
 use NetSDS::Util::Convert;
+use NetSDS::Util::SMPPConvert;
 use NetSDS::Util::DateTime;
 use NetSDS::Util::String;
 use NetSDS::Util::Misc;
 use NetSDS::Queue;
 use NetSDS::App::SMSTradeOutQ;
-use NetSDS::App::SMSTradeInQ;
+#use NetSDS::App::SMSTradeInQ;
+use NetSDS::App::SMSTradeInDB;
 use IPC::ShareLite qw ( :lock );
 use JSON;
 use DBI;
 use Time::HiRes qw(usleep);
 use Data::Dumper;
 use POSIX qw(floor);
-
+use Encode;
+use Socket;
+use IO::Handle;
 
 # SMPP PDU command_id table
 use constant cmd_tab => {
@@ -82,9 +86,10 @@ use constant cmd_tab => {
 	0x80000015 => 'enquire_link_resp',
 };
 
-my @CHILDREN        = array();
-my $ESME            = undef;
-my $LOCAL_SYSTEM_ID = NetSDS::App::SMPP::SYSTEM_NAME;
+my @CHILDREN           = array();
+my $ESME               = undef;
+my $LOCAL_SYSTEM_ID    = NetSDS::App::SMPP::SYSTEM_NAME;
+my $throttle_timestamp = undef;
 
 sub initialize {
 
@@ -178,11 +183,13 @@ sub initialize {
 	$this->selector( IO::Select->new() );
 
 	# Initialize queue listener for outgoing events
-	$this->_init_out_queue();
-	$this->selector->add( $this->out_queue );
+	# $this->_init_out_queue();
+	$this->selector->add( $this->{'socket_out_queue'} );
 
 	# Initialize queue for incoming (MT) events
-	$this->_init_in_queue();
+	my $plugindb = NetSDS::App::SMSTradeInDB->new();
+	$plugindb->{conf} = $this->{conf};
+	$this->{'plugindb'} = $plugindb;
 
 	# Initialize listening socket and add to select()
 	$this->_init_listener();
@@ -194,30 +201,30 @@ sub initialize {
 	# Initialize SHM area
 	$this->_init_shm();
 
-	$this->_edr_init(); 
+	$this->_edr_init();
 
 } ## end sub initialize
 
-sub _edr_init { 
-	my $this = shift; 
+sub _edr_init {
+	my $this = shift;
 	# Initialize EDR writer
 
 	if ( defined( $this->{conf}->{'edr'}->{'type'} ) ) {
 		my $edr_type = $this->{conf}->{'edr'}->{'type'};
 		if ( $edr_type =~ /database/i ) {
-			my $edr = NetSDS::EDR->new (
+			my $edr = NetSDS::EDR->new(
 				type     => 'database',
 				dsn      => $this->{conf}->{'edr'}->{'dsn'},
 				user     => $this->{conf}->{'edr'}->{'db-user'},
 				password => $this->{conf}->{'edr'}->{'db-password'},
 				query    => $this->{conf}->{'edr'}->{'query'}
 			);
-			unless ( defined ($edr) ) { 
-				warn Dumper ($edr); 
-				warn Dumper ($this->{conf}->{'edr'}); 
-				die "Can't init EDR"; 
+			unless ( defined($edr) ) {
+				warn Dumper($edr);
+				warn Dumper( $this->{conf}->{'edr'} );
+				die "Can't init EDR";
 			}
-			$this->{edr_writer} = $edr; 
+			$this->{edr_writer} = $edr;
 			$this->{'edr_mapping'} = $this->{conf}->{'edr'}->{'mapping'};
 			$this->log( "info", "EDR database writer started." );
 
@@ -238,14 +245,16 @@ sub _edr_init {
 		}
 
 	} ## end if ( defined( $this->{...
-}
+} ## end sub _edr_init
 
 sub _edr_write {
 	my $this   = shift;
 	my $record = shift;
 	my $params = $this->{'edr_mapping'};
 
-	$this->{edr_writer}->write( $record, $params );
+	if ( defined( $this->{edr_writer} ) ) {
+		$this->{edr_writer}->write( $record, $params );
+	}
 
 }
 
@@ -255,33 +264,53 @@ sub _burn_children {
 
 	# Out Q
 	$this->speak("[$$] Forking Outgoing Queue Plugin");
+	my $socket_child  = undef;
+	my $socket_parent = undef;
+
+	socketpair( $socket_child, $socket_parent, AF_UNIX, SOCK_STREAM, PF_UNSPEC );
+	$socket_child->autoflush(1);
+	$socket_parent->autoflush(1);
+
 	my $pid = fork();
 	unless ( defined($pid) ) {
 		die "[$$] Fork() for Outgoing Queue Plugin failed: $!";
 	}
 	if ( $pid == 0 ) {
 		$this->speak("[$$] Running NetSDS::App::SMSTradeOutQ");
+		close $socket_child;
 		my $smsout = new NetSDS::App::SMSTradeOutQ();
-		$smsout->{conf} = $this->{conf};
+		$smsout->{conf}          = $this->{conf};
+		$smsout->{server_socket} = $socket_parent;
 		$smsout->run();
-		die "[$$] NetSDS::App::SMSTradeInQ died.";
+		die "[$$] NetSDS::App::SMSTradeOutQ died.";
 	}
 	push @CHILDREN, $pid;
+	close $socket_parent;
+	$this->{'socket_out_queue'} = $socket_child;
 
-	# In Q
-	$this->speak("[$$] Forking Incoming Queue Plugin");
-	$pid = fork();
-	unless ( defined($pid) ) {
-		die "[$$] Fork() for Incoming Queue Plugin failed: $!";
-	}
-	if ( $pid == 0 ) {
-		$this->speak("[$$] Running NetSDS::App::SMSTradeInQ");
-		my $smsin = new NetSDS::App::SMSTradeInQ();
-		$smsin->{conf} = $this->{conf};
-		$smsin->run();
-		die "[$$] NetSDS::App::SMSTradeInQ died.";
-	}
-	push @CHILDREN, $pid;
+	#	# In Q
+	#	socketpair($socket_child, $socket_parent, AF_UNIX, SOCK_STREAM, PF_UNSPEC );
+	#	$socket_child->autoflush(1);
+	#	$socket_parent->autoflush(1);
+
+	#	$this->speak("[$$] Forking Incoming Queue Plugin");
+	#	$pid = fork();
+	#	unless ( defined($pid) ) {
+	#		die "[$$] Fork() for Incoming Queue Plugin failed: $!";
+	#	}
+	#	if ( $pid == 0 ) {
+	#		$this->speak("[$$] Running NetSDS::App::SMSTradeInQ");
+	#		close $socket_child;
+	#
+	#	my $smsin = new NetSDS::App::SMSTradeInQ();
+	#	$smsin->{conf} = $this->{conf};
+	#	$smsin->{server_socket} = $socket_parent;
+	#	$smsin->run();
+	#	die "[$$] NetSDS::App::SMSTradeInQ died.";
+	#	}
+	#	close $socket_parent;
+	#	$this->{socket_in_queue} = $socket_child;
+	#	push @CHILDREN, $pid;
 
 } ## end sub _burn_children
 
@@ -747,9 +776,10 @@ sub _authorize_submit {
 	}
 	$this->_edr_write(
 		{
-			event_name    => 'Submit',
+			event_name    => 'cmd_submit_sm',
 			system_id     => $login,
 			Status        => 'FAIL',
+			Cause         => 'Invalid source',
 			src_addr_port => $src,
 		}
 	);
@@ -791,6 +821,7 @@ Check for count SMS in seconds
 sub _throttling {
 
 	my ( $this, $login ) = @_;
+	my $new_message_timestamp = time();
 
 	# If last_message_timestamp does not exist, accept;
 	unless ( defined( $ESME->{$login}->{'last_message_timestamp'} ) ) {
@@ -799,9 +830,7 @@ sub _throttling {
 	}
 
 	my $last_message_timestamp = $ESME->{$login}->{'last_message_timestamp'};
-	my $new_message_timestamp  = time();
-
-	my $difference = $new_message_timestamp - $last_message_timestamp;
+	my $difference             = $new_message_timestamp - $last_message_timestamp;
 
 	if ( $difference > 0 ) {
 		$ESME->{$login}->{'last_message_timestamp'}  = $new_message_timestamp;
@@ -819,8 +848,28 @@ sub _throttling {
 	unless ( defined( $ESME->{$login}->{'last_second_sm_received'} ) ) {
 		$ESME->{$login}->{'last_second_sm_received'} = 0;
 	}
+	$ESME->{$login}->{'last_second_sm_received'} = $ESME->{$login}->{'last_second_sm_received'} + 1;
+
+	# Local user bandwidth check
+	if ( ( $ESME->{$login}->{'last_second_sm_received'} ) > $ESME->{$login}->{'bandwidth'} ) {
+		return undef;    # Deny
+	}
+
+	my $k = 1000;
+
+	# Caching global throttling check
+	unless ( defined($throttle_timestamp) ) {
+		$throttle_timestamp = time();
+		$k                  = $this->_find_current_bandwidth_k($login);
+	}
+	$difference = $new_message_timestamp - $throttle_timestamp;
+
+	if ( $difference > 60 ) {
+		$k                  = $this->_find_current_bandwidth_k($login);
+		$throttle_timestamp = $new_message_timestamp;
+	}
+
 	# Global system bandwidth check
-	my $k = $this->_find_current_bandwidth_k($login);
 	if ( ( $ESME->{$login}->{'last_second_sm_received'} + 1 ) > $k ) {
 		$this->log( "warning", "Deny send SMS from $login for GLOBAL THROTTLING reason." );
 		$this->speak("[$$] Deny send SMS from $login for GLOBAL THROTTLING reason.");
@@ -836,24 +885,6 @@ sub _throttling {
 		return undef;
 	}
 
-	# Local user bandwidth check
-	if ( ( $ESME->{$login}->{'last_second_sm_received'} + 1 ) > $ESME->{$login}->{'bandwidth'} ) {
-		$this->log( "warning", "Deny send SMS from $login for THROTTLING reason." );
-		$this->speak("[$$] Deny send SMS from $login for THROTTLING reason.");
-		$this->_edr_write(
-			{
-				event_name => 'Submit',
-				system_id  => $login,
-				Status     => 'FAIL',
-				Reason     => 'LOGIN THROTTLING'
-			}
-		);
-
-		return undef;
-		# Deny
-	}
-
-	$ESME->{$login}->{'last_second_sm_received'} = $ESME->{$login}->{'last_second_sm_received'} + 1;
 	return 1;    # accept
 
 } ## end sub _throttling
@@ -877,18 +908,33 @@ sub cmd_submit_sm {
 	my $resp_status = undef;          # response command status
 	my $message_id  = make_uuid();    # message id on CPA (UUID style)
 
-	my $list = decode_json( $this->shm->fetch );
-	my $mode = $list->{ $hdl->{system_id} }->{'mode'};
+	my $utf8_text = '';               # message text in utf8 charset for EDR
+
+	my $mode = $hdl->{'mode'};
 
 	# Check if client is authenticated
-	if (    ( $hdl->{authenticated} )
-		and ( $this->_authorize_submit( $pdu, $hdl ) )
-		and ( $mode ne 'receiver' ) )
-	{
+	unless ( $hdl->{authenticated} ) {
+		$resp_status = 0x45;
+		goto SUBMIT_SM_RESP;
+	}
 
+	# FIXME - cache authorize
+	my $is_auth = $this->_authorize_submit( $pdu, $hdl );
+	unless ($is_auth) {
+		$resp_status = 0x45;
+		goto SUBMIT_SM_RESP;
+	}
+
+	if ( $mode eq 'receiver' ) {
+		$resp_status = 0x45;
+		goto SUBMIT_SM_RESP;
+	}
+
+	unless ( defined($resp_status) ) {
 		# Throttling ?
+		my $is_throttle = $this->_throttling( $hdl->{system_id} );
 
-		unless ( defined( $this->_throttling( $hdl->{system_id} ) ) ) {
+		unless ( defined($is_throttle) ) {
 
 			$resp_status = 0x00000058;    # ESME_RTHROTTLED
 
@@ -901,6 +947,7 @@ sub cmd_submit_sm {
 			$this->_edr_write(
 				{
 					event_name    => 'cmd_submit_sm',
+					system_id     => $hdl->{system_id},
 					cmd_id        => 0x04,
 					cmd_status    => $resp_status,
 					message_id    => $message_id,
@@ -908,14 +955,17 @@ sub cmd_submit_sm {
 					src_addr_port => $hdl->{id}
 				}
 			);
+			goto SUBMIT_SM_RESP;
 
-		} ## end unless ( defined( $this->_throttling...
+		} ## end unless ( defined($is_throttle...
+
+		my $date_now = POSIX::strftime( "%Y-%m-%d %H:%M:%S", localtime );    #date_now();
 
 		# Create empty message
 		my $queue_msg = {
 			client   => $hdl->{system_id},
-			created  => date_now(),
-			received => date_now(),
+			created  => $date_now,
+			received => $date_now,
 		};
 
 		unless ( defined( $ESME->{ $hdl->{system_id} } ) ) {
@@ -945,8 +995,6 @@ sub cmd_submit_sm {
 		# Determine: message_class, coding, MWI flags
 		#
 		my $data_coding = $pdu->{data_coding};
-
-		$this->log( "warning", sprintf( "Data coding: %b ", $data_coding ) ) if ( $this->{debug} );
 
 		# Check if message_class is present
 		if ( ( $data_coding & 0b00010000 ) eq 0b00010000 ) {
@@ -997,6 +1045,10 @@ sub cmd_submit_sm {
 			$queue_msg->{udh} = conv_str_hex($udh);
 		}
 
+		# Convert text to UTF-8 for event logging
+		$utf8_text = conv_gsm_utf8( $msg_text, $coding );
+		$utf8_text = decode( 'utf-8', $utf8_text );    # Not byte, only Utf-8.
+
 		# Put User Data (UD) to message structure
 		$queue_msg->{body} = $msg_text;
 
@@ -1022,33 +1074,22 @@ sub cmd_submit_sm {
 			$queue_msg->{priority} = $pdu->{priority_flag} + 0;
 		}
 
-		$this->log(
-			"info",
-			sprintf(
-				"MT SM submitted: id='%s', from='%s', to='%s'",
-				$queue_msg->{message_id},
-				$queue_msg->{src_addr},
-				$queue_msg->{dst_addr}
-			)
-		);
-
 		# Encoding queue_msg to JSON pretty
-		my $json_text = to_json( $queue_msg, { ascii => 1, pretty => 1 } );
+		# my $json_text = to_json( $queue_msg, { ascii => 1, pretty => 1 } );
 
 		# Sending to IN Queue
-		my $res = $this->in_queue->print( conv_str_base64($json_text) . "\n" );
-		if ( !$res ) {
-			$resp_status = 0x45;    # ESME_RSUBMITFAIL
-		}
-		my $confirm = $this->in_queue->getline;
-		if ( $confirm =~ /OK/ ) {
-			$resp_status = 0x00;
-		} else {
+		# my $res = $this->in_queue->print( conv_str_base64($json_text) . "\n" );
+		#
+		#$json_text = conv_str_base64($json_text)."\n";
+		#
+		#$resp_status = $this->_send_to_inq($json_text); # Around 50%;
+		my $res = $this->{'plugindb'}->_put_mt($queue_msg);
+		unless ( defined($res) ) {
 			$resp_status = 0x45;
+		} else {
+			$resp_status = 0x00;
 		}
-	} else {
-		$resp_status = 0x45;        # ESME_RSUBMITFAIL
-	}
+	} ## end unless ( defined($resp_status...
 
 	SUBMIT_SM_RESP:
 
@@ -1068,16 +1109,17 @@ sub cmd_submit_sm {
 				seq           => $pdu->{seq},
 				src           => $pdu->{source_addr},
 				dst           => $pdu->{destination_addr},
-				text          => $pdu->{short_message},
+				text          => $utf8_text,
 				src_addr_port => $hdl->{id},
 			}
 		);
 
 	} ## end if ( $resp_status != 0x00)
 	if ( $resp_status == 0x00 ) {
+
 		$this->_edr_write(
 			{
-				event_name    => 'Submit',
+				event_name    => 'cmd_submit_sm',
 				system_id     => $hdl->{system_id},
 				Status        => 'OK',
 				cmd_id        => 0x04,
@@ -1086,13 +1128,16 @@ sub cmd_submit_sm {
 				seq           => $pdu->{seq},
 				src           => $pdu->{source_addr},
 				dst           => $pdu->{destination_addr},
-				text          => $pdu->{short_message},
+				text          => $utf8_text,
 				src_addr_port => $hdl->{id},
 			}
 		);
+
+		#FIXME: cache this!
 		$this->_increase_received( $hdl->{system_id} );
 
-	}
+	} ## end if ( $resp_status == 0x00)
+
 	# Send response to ESME
 	# Note: we use asynchronous sending to avoid deadlocks
 	$hdl->{smpp}->submit_sm_resp(
@@ -1103,6 +1148,27 @@ sub cmd_submit_sm {
 	);
 
 } ## end sub cmd_submit_sm
+
+sub _send_to_inq {
+	my $this         = shift;
+	my $json_text    = shift;
+	my $input_socket = $this->{socket_in_queue};
+	my $resp_status  = undef;
+
+	my $res = print $input_socket $json_text;
+	if ( !$res ) {
+		$resp_status = 0x45;    # ESME_RSUBMITFAIL
+	}
+
+	my $confirm = <$input_socket>;
+	if ( $confirm =~ /OK/ ) {
+		$resp_status = 0x00;
+	} else {
+		$resp_status = 0x45;
+	}
+
+	return $resp_status;
+} ## end sub _send_to_inq
 
 sub cmd_unbind {
 
@@ -1516,66 +1582,78 @@ sub cmd_bind_receiver {
 sub _process_out_queue {
 	my ( $this, %params ) = @_;
 
-	# Try to get next line from Queue server over TCP socket
-	if ( my $line = $this->out_queue->getline() ) {
+	my $output_socket = $this->{'socket_out_queue'};
 
-		# Return if keepalive
-		if ( $line =~ '-MARK-' ) {
-			$this->speak("Keepalive from queue server");
-			return 1;
+	# Try to get next line from Queue server over TCP socket
+	my $line = <$output_socket>;
+	unless ( defined($line) ) {
+		return undef;
+	}
+	# Return if keepalive
+	if ( $line =~ '-MARK-' ) {
+		$this->speak("Keepalive from queue server");
+		return 1;
+	}
+
+	my $mo = decode_json( conv_base64_str($line) );
+
+	$this->log( "info", "got SM from OutQ:" . Dumper($mo) ) if ( $this->{debug} );
+
+	# Check if exist in MO esme_id
+	unless ( defined( $mo->{'esme_id'} ) ) {
+		$this->speak("[$$] MO with empty esme_id");
+		$this->log( "warning", "MO with empty esme_id" );
+	} else {
+		# esme_id is not empty, searching system_id and socket
+		foreach my $esme ( keys %$ESME ) {
+			unless ( defined( $ESME->{$esme}->{'esme_id'} ) ) { next; }
+			if ( $ESME->{$esme}->{'esme_id'} eq $mo->{'esme_id'} ) {
+				$mo->{'system_id'} = $esme;
+				last;
+			}
+		}
+		
+		unless ( defined ( $mo->{'system_id'} ) ) {
+			# ESME was not connected from server start. 
+			# Information about it not found in our memory. 
+			# Situation: Not connected. Return ERROR. 
+			$this->log("info","ESME with ID # " .$mo->{'esme_id'} . " was not connected yet.");
+			print $output_socket "ERROR\n"; 
+			return undef; 
+
+		}
+		# Looking for proper ESME connect
+		my $esme_connect_found = 0;
+		my @esme_connects      = ();
+
+		foreach my $hdl ( values %{ $this->handlers } ) {
+			unless ( defined( $hdl->{system_id} ) ) { next; }
+			if ( $hdl->{system_id} eq $mo->{'system_id'} ) {
+				if ( ( $hdl->{mode} eq 'transceiver' ) or ( $hdl->{mode} eq 'receiver' ) ) {
+					# Found connect. Push IT.
+					push @esme_connects, $hdl;
+					$esme_connect_found = $esme_connect_found + 1;
+				}
+			}
 		}
 
-		my $mo = decode_json( conv_base64_str($line) );
-
-		$this->log( "info", "got SM from OutQ:" . Dumper($mo) ) if ( $this->{debug} );
-
-		# Check if exist in MO esme_id
-		unless ( defined( $mo->{'esme_id'} ) ) {
-			$this->speak("[$$] MO with empty esme_id");
-			$this->log( "warning", "MO with empty esme_id" );
+		if ( $esme_connect_found <= 0 ) {
+			$this->speak( "[$$] ESME " . $mo->{'system_id'} . "not found in active list. " );
+			$this->log( "warning", "ESME " . $mo->{'system_id'} . "not found in active list. " );
+			print $output_socket "ERROR\n";
 		} else {
-			# esme_id is not empty, searching system_id and socket
-			foreach my $esme ( keys %$ESME ) {
-				unless ( defined( $ESME->{$esme}->{'esme_id'} ) ) { next; }
-				if ( $ESME->{$esme}->{'esme_id'} eq $mo->{'esme_id'} ) {
-					$mo->{'system_id'} = $esme;
-					last;
-				}
-			}
-
-			# Looking for proper ESME connect
-			my $esme_connect_found = 0;
-			my @esme_connects      = ();
-
-			foreach my $hdl ( values %{ $this->handlers } ) {
-				unless ( defined( $hdl->{system_id} ) ) { next; }
-				if ( $hdl->{system_id} eq $mo->{'system_id'} ) {
-					if ( ( $hdl->{mode} eq 'transceiver' ) or ( $hdl->{mode} eq 'receiver' ) ) {
-						# Found connect. Push IT.
-						push @esme_connects, $hdl;
-						$esme_connect_found = $esme_connect_found + 1;
-					}
-				}
-			}
-
-			if ( $esme_connect_found <= 0 ) {
-				$this->speak( "[$$] ESME " . $mo->{'system_id'} . "not found in active list. " );
-				$this->log( "warning", "ESME " . $mo->{'system_id'} . "not found in active list. " );
-				$this->out_queue->print("ERROR\n");
+			my $hdl_index = rand($esme_connect_found);          # Select random connect
+			my $hdl       = $esme_connects[$hdl_index];
+			my $dlvrd     = $this->_deliver_sm( $hdl, $mo );    # send deliver_sm to ESME
+			unless ( defined($dlvrd) ) {
+				print $output_socket "ERROR\n";
 			} else {
-				my $hdl_index = rand($esme_connect_found);          # Select random connect
-				my $hdl       = $esme_connects[$hdl_index];
-				my $dlvrd     = $this->_deliver_sm( $hdl, $mo );    # send deliver_sm to ESME
-				unless ( defined($dlvrd) ) {
-					$this->out_queue->print("ERROR\n");
-				} else {
-					$this->out_queue->print("OK\n");
-				}
+				print $output_socket "OK\n";
 			}
+		}
 
-		} ## end else
+	} ## end else
 
-	} ## end if ( my $line = $this->out_queue...
 } ## end sub _process_out_queue
 
 sub _deliver_sm {
@@ -1730,7 +1808,7 @@ sub _process_socket {
 			$pdu_cmd = cmd_tab->{ $pdu->{cmd} };
 		}
 
-		$this->speak("[$$] PDU arrived: $pdu_cmd");
+		# $this->log("info", "PDU arrived: $pdu_cmd");
 
 		# Determine method name to dispatch PDU call
 		my $method_name = "cmd_" . $pdu_cmd;
@@ -1787,6 +1865,64 @@ sub _shutup {
 		}
 	}
 }
+
+sub main_loop {
+
+	my ( $this, %params ) = @_;
+
+	# Run user defined hooks on startup
+	$this->start();
+
+	# Run main process loop
+	while ( !$this->{to_finalize} ) {
+
+		# Wait for incoming events on all sockets
+		my ( $sel_r, $sel_w, $sel_x ) = IO::Select->select( $this->selector, undef, undef, 0.0005 );
+
+		# Go through available for reading sockets
+		if ( $sel_r and my @readers = @{$sel_r} ) {
+
+			# Check all sockets ready for reading
+			foreach my $reader (@readers) {
+
+				no warnings 'uninitialized';
+
+				#			warn Dumper (\@readers);
+				#warn Dumper ($this->out_queue);
+				if ( $reader eq $this->listener ) {
+
+					# Process incoming connection
+					$this->_accept_incoming();
+
+				} elsif ( $reader eq $this->{'socket_out_queue'} ) {
+
+					# Process ougoing queue
+					$this->_process_out_queue();
+
+				} else {
+
+					# Process events from established SMPP connection
+					foreach my $hdl_key ( keys %{ $this->handlers } ) {
+						if ( $this->handlers->{$hdl_key} and ( $this->handlers->{$hdl_key}->{smpp} eq $reader ) ) {
+							$this->_process_socket( $this->handlers->{$hdl_key} );
+						}
+					}
+
+				}
+				;    ## end if ( $reader eq $this->listener )
+
+				use warnings 'all';
+
+			} ## end foreach my $reader (@readers)
+
+		} ## end if ( $sel_r and my @readers...
+
+	} ## end while ( !$this->{to_finalize...
+
+	# Run user defined hooks on shutdown
+	$this->stop();
+
+} ## end sub main_loop
 
 1;
 #===============================================================================
