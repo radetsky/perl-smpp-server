@@ -47,7 +47,7 @@ use NetSDS::Util::DateTime;
 
 sub run {
 
-	my ($this) = shift;
+	my $this = shift;
 
 	my $share = new IPC::ShareLite(
 		-key     => 1987,
@@ -58,8 +58,8 @@ sub run {
 
 	my $list          = decode_json( $share->fetch );
 
-	my $my_local_data = defined( $this->conf->{'shm'}->{'magickey'} ) ? $this->conf->{'shm'}->{'magickey'} : 'My L0c4l D4t4';
-    	#my $my_local_data = 'My L0c4l D4t4';
+	#my $my_local_data = defined( $this->conf->{'shm'}->{'magickey'} ) ? $this->conf->{'shm'}->{'magickey'} : 'My L0c4l D4t4';
+    my $my_local_data = 'My L0c4l D4t4';
 
 	# Show start and uptime
 	my $start_time             = $list->{$my_local_data}->{'start_timestamp'};
@@ -71,7 +71,7 @@ sub run {
 
 	printf("Connected list: \n");
 	printf("--------------------+-------------+------------+------+-------+-------+------\n");
-	printf("  CONNECT SRC       |  SYSTEM_ID  |    MODE    | BAND | SENT  | RCVD  | CNTD \n");
+	printf("  CONNECT SRC       |  SYSTEM_ID  |    MODE    | BAND | SENT  | RCVD  | CONN \n");
 	printf("--------------------+-------------+------------+------+-------+-------+------\n");
 	foreach my $connect_id ( keys %$list) {
 		if ($connect_id eq $my_local_data) { next; }
