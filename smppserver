@@ -383,14 +383,13 @@ sub _auth_esme {
 	if ( my $res = $sth->fetchrow_hashref() ) {
 
 		my $system_id = $res->{'system_id'};
-
-		unless ( defined( $ESME->{$system_id} ) ) {    # if this record does not exist in hasref ESME
-			$ESME->{$system_id} = $res;                # add it
+		unless ( defined( $ESME->{$system_id} ) ) {    
+			# if this record does not exist in hasref ESME
+			$ESME->{$system_id} = $res; # add it
 		}
 
 		unless ( defined( $ESME->{$system_id}->{'already_connected'} ) ) {    # no connections ?
 			$this->log( "info", "Setting already_connected to 0" );
-			$this->speak("[$$] Setting already_connected to 0");
 			$ESME->{$system_id}->{'already_connected'} = 0;
 		}
 
@@ -398,7 +397,6 @@ sub _auth_esme {
 		unless ( defined( $res->{'max_connections'} ) ) {
 			$ESME->{$system_id}->{'max_connections'} = 1;
 			$this->log( "warning", "Max_connections for " . $system_id . " is NULL. Default value set to 1. " );
-			$this->speak( "[$$] Max_connections for " . $system_id . " is NULL. Default value set to 1. " );
 		} else {
 			$ESME->{$system_id}->{'max_connections'} = $res->{'max_connections'};
 		}
@@ -407,7 +405,6 @@ sub _auth_esme {
 		unless ( defined( $res->{'allowed_ip'} ) ) {
 			$ESME->{$system_id}->{'allowed_ip'} = '0.0.0.0';
 			$this->log( "warning", "Allowed src ip for " . $system_id . " is NULL. Default value set to 0.0.0.0 " );
-			$this->speak( "[$$] Allowed src ip for " . $system_id . " is NULL. Default value set to 0.0.0.0 " );
 		} else {
 			$ESME->{$system_id}->{'allowed_ip'} = $res->{'allowed_ip'};
 		}
@@ -415,7 +412,6 @@ sub _auth_esme {
 		unless ( defined( $res->{'bandwidth'} ) ) {
 			$ESME->{$system_id}->{'bandwidth'} = 1;
 			$this->log( "warning", "Setting bandwidth for $system_id to 1/s" );
-			$this->speak("[$$] Setting bandwidth for $system_id to 1/s");
 		} else {
 			$ESME->{$system_id}->{'bandwidth'} = $res->{'bandwidth'};
 		}
@@ -492,15 +488,20 @@ Increase received messages value
 =cut 
 
 sub _increase_received {
-	my ( $this, $login ) = @_;
-
-	$ESME->{$login}->{'received'} = $ESME->{$login}->{'received'} + 1;
+	my ( $this, $connect_id ) = @_;
 
 	$this->shm->lock(LOCK_EX);
 	my $list = decode_json( $this->shm->fetch );
-	$list->{$login}->{'received'} = $ESME->{$login}->{'received'};
+	unless ( defined ( $list->{$connect_id}->{'received'} ) ) { 
+		$list->{$connect_id}->{'received'} = 1; 
+	} else { 
+		$list->{$connect_id}->{'received'} = $list->{$connect_id}->{'received'} + 1; 
+	}
 	$this->shm->store( encode_json($list) );
 	$this->shm->unlock;
+
+	my $login = $list->{$connect_id}->{'login'}; 
+	$ESME->{$login}->{'received'}  = $ESME->{$login}->{'received'} + 1; 
 
 }
 
@@ -511,15 +512,21 @@ Increase sent messages value
 =cut 
 
 sub _increase_sent {
-	my ( $this, $login ) = @_;
+	my ( $this, $connect_id ) = @_;
 
-	$ESME->{$login}->{'sent'} = $ESME->{$login}->{'sent'} + 1;
 	$this->shm->lock(LOCK_EX);
 	my $list = decode_json( $this->shm->fetch );
-	$list->{$login}->{'sent'} = $ESME->{$login}->{'sent'};
+	unless ( defined ( $list->{$connect_id}->{'sent'} ) ) { 
+		$list->{$connect_id}->{'sent'} = 1; 
+	} else { 
+		$list->{$connect_id}->{'sent'} = $list->{$connect_id}->{'sent'} + 1; 
+	}
 	$this->shm->store( encode_json($list) );
 	$this->shm->unlock;
 
+	my $login = $list->{$connect_id}->{'login'}; 
+	$ESME->{$login}->{'sent'} = $ESME->{$login}->{'sent'} + 1;
+	
 }
 
 =item B<_increase_already_connected> 
@@ -534,14 +541,11 @@ sub _increase_already_connected {
 
 	my $new_connection_num = $ESME->{$system_id}->{'already_connected'} + 1;
 	if ( $new_connection_num > $ESME->{$system_id}->{'max_connections'} ) {
-		$this->speak("[$$] ESME \"$system_id\" reached maximum of connections. ");
 		$this->log( "warning", "ESME \"$system_id\" reached maximum of connections. " );
-
 		return undef;    # Do not authorize.
 
 	}
 	$ESME->{$system_id}->{'already_connected'} = $ESME->{$system_id}->{'already_connected'} + 1;
-	$this->speak( "[$$] ESME \"$system_id\" already connected " . $ESME->{$system_id}->{'already_connected'} . " times" );
 	$this->log( "info", "ESME \"$system_id\" already connected " . $ESME->{$system_id}->{'already_connected'} . " times" );
 
 	return 1;
@@ -560,20 +564,15 @@ sub _decrease_already_connected {
 
 	unless ( defined( $ESME->{$login} ) ) {
 		$this->log( "error", "Try to decrease already_connected for unexistent login $login" );
-		$this->speak("[$$] Try to decrease already_connected for unexistent login $login");
 		return undef;
 	}
 	$ESME->{$login}->{'already_connected'} = $ESME->{$login}->{'already_connected'} - 1;
 	if ( $ESME->{$login}->{'already_connected'} < 0 ) {
 		$this->log( "error", "Decreased already_connected for $login < 0!" );
-		$this->speak("[$$] Decreased already_connected for $login < 0!");
 		$ESME->{$login}->{'already_connected'} = 0;
 		return 1;
 	}
-
 	$this->log( "info", "Decrease already_connected for $login to " . $ESME->{$login}->{'already_connected'} );
-	$this->speak( "[$$] Decrease already_connected for $login to " . $ESME->{$login}->{'already_connected'} );
-
 	return 1;
 
 } ## end sub _decrease_already_connected
@@ -1146,7 +1145,7 @@ sub cmd_submit_sm {
 		);
 
 		#FIXME: cache this!
-		$this->_increase_received( $hdl->{system_id} );
+		$this->_increase_received( $hdl->{id} );
 
 	} ## end if ( $resp_status == 0x00)
 
@@ -1203,14 +1202,14 @@ sub cmd_unbind {
 			# If it was last connect, remove ESME from SHM
 			$this->shm->lock(LOCK_EX);
 			my $list = decode_json( $this->shm->fetch );
-			delete $list->{ $hdl->{system_id} };
+			delete $list->{ $hdl->{id} };
 			$this->shm->store( encode_json($list) );
 			$this->shm->unlock;
 		} else {
 			# ELSE Just decrease already_connected value in SHM
 			$this->shm->lock(LOCK_EX);
 			my $list = decode_json( $this->shm->fetch );
-			$list->{$system_id}->{'already_connected'} = $ESME->{$system_id}->{'already_connected'};
+			$list->{ $hdl->{id} }->{'already_connected'} = $ESME->{$system_id}->{'already_connected'};
 			$this->shm->store( encode_json($list) );
 			$this->shm->unlock;
 		}
@@ -1319,9 +1318,7 @@ sub cmd_bind_transceiver {
 
 		# Authentication. ID contains IP:PORT value
 		if ( $this->_auth_esme( $login, $passwd, $hdl->{'id'} ) ) {
-			$this->speak("[$$] ESME '$login' successfully authenticated");
 			$this->log( "info", "ESME '$login' successfully authenticated" );
-
 			$resp_status = $this->_authorize_esme( $login, $hdl );
 			if ( $resp_status == 0x00 ) {
 
@@ -1332,13 +1329,15 @@ sub cmd_bind_transceiver {
 
 				# Update SHM struture
 				my $list = decode_json( $this->shm->fetch );
+				my $connect_id = $hdl->{id}; 
 
-				$list->{$login}->{'esme_id'}           = $ESME->{$login}->{'esme_id'};
-				$list->{$login}->{'mode'}              = 'transciever';
-				$list->{$login}->{'bandwidth'}         = $ESME->{$login}->{'bandwidth'};
-				$list->{$login}->{'already_connected'} = $ESME->{$login}->{'already_connected'};
-				$list->{$login}->{'sent'}              = $ESME->{$login}->{'sent'};
-				$list->{$login}->{'received'}          = $ESME->{$login}->{'received'};
+				$list->{$connect_id}->{'esme_id'}           = $ESME->{$login}->{'esme_id'};
+				$list->{$connect_id}->{'mode'}              = 'transciever';
+				$list->{$connect_id}->{'bandwidth'}         = $ESME->{$login}->{'bandwidth'};
+				$list->{$connect_id}->{'already_connected'} = $ESME->{$login}->{'already_connected'};
+				$list->{$connect_id}->{'sent'}              = $ESME->{$login}->{'sent'};
+				$list->{$connect_id}->{'received'}          = $ESME->{$login}->{'received'};
+				$list->{$connect_id}->{'login'}        = $login; 
 
 				$this->shm->lock(LOCK_EX);
 				$this->shm->store( encode_json($list) );
@@ -1433,13 +1432,15 @@ sub cmd_bind_transmitter {
 
 				# Update SHM struture
 				my $list = decode_json( $this->shm->fetch );
+				my $connect_id = $hdl->{id}; 
 
-				$list->{$login}->{'esme_id'}           = $ESME->{$login}->{'esme_id'};
-				$list->{$login}->{'mode'}              = 'transmitter';
-				$list->{$login}->{'bandwidth'}         = $ESME->{$login}->{'bandwidth'};
-				$list->{$login}->{'already_connected'} = $ESME->{$login}->{'already_connected'};
-				$list->{$login}->{'sent'}              = $ESME->{$login}->{'sent'};
-				$list->{$login}->{'received'}          = $ESME->{$login}->{'received'};
+				$list->{$connect_id}->{'login'}             = $login; 
+				$list->{$connect_id}->{'esme_id'}           = $ESME->{$login}->{'esme_id'};
+				$list->{$connect_id}->{'mode'}              = 'transmitter';
+				$list->{$connect_id}->{'bandwidth'}         = $ESME->{$login}->{'bandwidth'};
+				$list->{$connect_id}->{'already_connected'} = $ESME->{$login}->{'already_connected'};
+				$list->{$connect_id}->{'sent'}              = $ESME->{$login}->{'sent'};
+				$list->{$connect_id}->{'received'}          = $ESME->{$login}->{'received'};
 
 				$this->shm->lock(LOCK_EX);
 				$this->shm->store( encode_json($list) );
@@ -1530,13 +1531,15 @@ sub cmd_bind_receiver {
 
 				# Update SHM struture
 				my $list = decode_json( $this->shm->fetch );
+				my $connect_id = $hdl->{id}; 
 
-				$list->{$login}->{'esme_id'}           = $ESME->{$login}->{'esme_id'};
-				$list->{$login}->{'mode'}              = 'receiver';
-				$list->{$login}->{'bandwidth'}         = $ESME->{$login}->{'bandwidth'};
-				$list->{$login}->{'already_connected'} = $ESME->{$login}->{'already_connected'};
-				$list->{$login}->{'sent'}              = $ESME->{$login}->{'sent'};
-				$list->{$login}->{'received'}          = $ESME->{$login}->{'received'};
+				$list->{$connect_id}->{'login'} = $login; 
+				$list->{$connecy_id}->{'esme_id'}           = $ESME->{$login}->{'esme_id'};
+				$list->{$connect_id}->{'mode'}              = 'receiver';
+				$list->{$connect_id}->{'bandwidth'}         = $ESME->{$login}->{'bandwidth'};
+				$list->{$connect_id}->{'already_connected'} = $ESME->{$login}->{'already_connected'};
+				$list->{$connect_id}->{'sent'}              = $ESME->{$login}->{'sent'};
+				$list->{$connect_id}->{'received'}          = $ESME->{$login}->{'received'};
 
 				$this->shm->lock(LOCK_EX);
 				$this->shm->store( encode_json($list) );
@@ -1748,7 +1751,7 @@ sub _deliver_sm {
 			}
 		);
 
-		$this->_increase_sent( $hdl->{system_id} );
+		$this->_increase_sent( $hdl->{id} );
 		return 1;
 	} ## end if ( $mo->{id} )
 
@@ -1792,15 +1795,16 @@ sub _process_socket {
 			# Update SHM struture (only for defined system_id)
 			if ( $hdl->{system_id} ) {
 				if ( $ESME->{$login}->{'already_connected'} <= 0 ) {
+					# Если это был последний коннект, то удаляем структуру из памяти. Нечего занимать. 
 					$this->shm->lock(LOCK_EX);
 					my $list = decode_json( $this->shm->fetch );
-					delete $list->{ $hdl->{system_id} };
+					delete $list->{ $hdl->{id} };
 					$this->shm->store( encode_json($list) );
 					$this->shm->unlock;
 				} else {
 					$this->shm->lock(LOCK_EX);
 					my $list = decode_json( $this->shm->fetch );
-					$list->{$login}->{'already_connected'} = $ESME->{$login}->{'already_connected'};
+					$list->{$id}->{'already_connected'} = $ESME->{$login}->{'already_connected'};
 					$this->shm->store( encode_json($list) );
 					$this->shm->unlock;
 				}
@@ -1855,8 +1859,9 @@ sub _kick {
 	my $this = shift;
 
 	my $list = decode_json( $this->shm->fetch );
-	foreach my $login ( keys %$list ) {
-		if ( defined( $list->{$login}->{'kick'} ) ) {
+	foreach my $connect_id ( keys %$list ) {
+		if ( defined( $list->{$connect_id}->{'kick'} ) ) {
+			my $login = $list->{$connect_id}->{'login'}; 
 			$this->_shutup($login);
 		}
 	}

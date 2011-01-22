@@ -1,9 +1,9 @@
 #!/usr/bin/env perl 
 #===============================================================================
 #
-#         FILE:  smppd.pl
+#         FILE:  smppdstat.pl
 #
-#        USAGE:  ./smppd.pl
+#        USAGE:  ./smppdstat.pl
 #
 #  DESCRIPTION:  NetSDS SMPP Server V2 stat tool
 #
@@ -15,7 +15,7 @@
 #      COMPANY:  Net.Style
 #      VERSION:  1.0
 #      CREATED:  Septemper 2010 
-#     REVISION:  002
+#     REVISION:  003
 #===============================================================================
 
 use 5.8.0;
@@ -57,37 +57,33 @@ sub run {
 	  or die("Can't access to shared memory with segment 1987: $!\n");
 
 	my $list          = decode_json( $share->fetch );
-#	warn Dumper($list);
 
-#	my $my_local_data = defined( $this->conf->{'shm'}->{'magickey'} ) ? $this->conf->{'shm'}->{'magickey'} : 'My L0c4l D4t4';
-    my $my_local_data = 'My L0c4l D4t4';
-#	warn Dumper ($my_local_data);
+	my $my_local_data = defined( $this->conf->{'shm'}->{'magickey'} ) ? $this->conf->{'shm'}->{'magickey'} : 'My L0c4l D4t4';
+    	#my $my_local_data = 'My L0c4l D4t4';
 
 	# Show start and uptime
 	my $start_time             = $list->{$my_local_data}->{'start_timestamp'};
-#	warn Dumper ($start_time);
-
 	my $str_start_time = localtime($start_time);
-#	warn Dumper ($str_start_time);
 
 	my $timediff               = time() - $start_time;
 	my $str_uptime = $this->_uptime($timediff);
 	printf("Start time: %s\nUptime: %s\n",$str_start_time,$str_uptime); 
 
 	printf("Connected list: \n");
-	printf("-------------+------------+-----------+----------+----------+-----------\n");
-	printf("  SYSTEM_ID  |    MODE    | BANDWIDTH |   SENT   | RECEIVED | CONNECTED\n");
-	printf("-------------+------------+-----------+----------+----------+-----------\n");
-	foreach my $login ( keys %$list) {
-		if ($login eq $my_local_data) { next; }
+	printf("--------------------+-------------+------------+------+-------+-------+------\n");
+	printf("  CONNECT SRC       |  SYSTEM_ID  |    MODE    | BAND | SENT  | RCVD  | CNTD \n");
+	printf("--------------------+-------------+------------+------+-------+-------+------\n");
+	foreach my $connect_id ( keys %$list) {
+		if ($connect_id eq $my_local_data) { next; }
 
-		printf("%13s|%12s|%11s|%10d|%10d|%10d\n",
-			$login,
-			$list->{$login}->{'mode'},
-			$list->{$login}->{'bandwidth'},
-			$list->{$login}->{'sent'},
-			$list->{$login}->{'received'},
-			$list->{$login}->{'already_connected'}); 
+		printf("%20s|%13s|%12s|%6s|%7d|%7d|%6d\n",
+			$connect_id,
+			$list->{$connect_id}->{'login'},
+			$list->{$connect_id}->{'mode'},
+			$list->{$connect_id}->{'bandwidth'},
+			$list->{$connect_id}->{'sent'},
+			$list->{$connect_id}->{'received'},
+			$list->{$connect_id}->{'already_connected'}); 
 
 	}
 

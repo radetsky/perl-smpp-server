@@ -78,9 +78,9 @@ sub process {
 	if ( defined( $this->{'kick'} ) ) {
 		printf("Kick system-id: %s\n",$this->{'kick'});  
 
-		foreach my $login ( keys %$list ) {
-			if ( $login eq $this->{'kick'} ) {
-				$list->{$login}->{'kick'} = 1;
+		foreach my $connect_id ( keys %$list ) {
+			if ( $list->{$connect_id}->{'login'} eq $this->{'kick'} ) {
+				$list->{$connect_id}->{'kick'} = 1;
 				$this->shm->lock;
 				$this->shm->store( encode_json($list) );
 				$this->shm->unlock;
