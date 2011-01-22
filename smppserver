@@ -187,8 +187,7 @@ sub initialize {
 	$this->selector->add( $this->{'socket_out_queue'} );
 
 	# Initialize queue for incoming (MT) events
-	my $plugindb = NetSDS::App::SMSTradeInDB->new();
-	$plugindb->{conf} = $this->{conf};
+	my $plugindb = NetSDS::App::SMSTradeInDB->new( $this->{conf} );
 	$this->{'plugindb'} = $plugindb;
 
 	# Initialize listening socket and add to select()
@@ -368,7 +367,17 @@ sub _auth_esme {
 	# First of all try to get information with full information like login and password
 	# Execute SQL query (should be present in configuration file)
 	my $sth = $this->authdbh->prepare( $this->conf->{auth}->{query} );
-	$sth->execute( $login, $passwd );
+	my $rv = $sth->execute( $login, $passwd );
+	unless ( defined($rv) ) {
+		# Execute returns error. Try to reconnect.
+		$this->log( "warning", "Can't execute SQL" . $this->conf->{auth}->{query} . " Trying to reconnect. " );
+		$this->_connect_db();
+		$sth = $this->authdbh->prepare( $this->conf->{auth}->{query} );
+		$rv = $sth->execute( $login, $passwd );
+		unless ( defined($rv) ) {
+			return undef;
+		}
+	}
 
 	# Try to get one row or return undef
 	if ( my $res = $sth->fetchrow_hashref() ) {
@@ -436,7 +445,16 @@ sub _auth_esme {
 		# Try to find just system_id.
 
 		my $sth = $this->authdbh->prepare( $this->conf->{auth}->{query_system_id} );
-		$sth->execute($login);
+		my $rv  = $sth->execute($login);
+		unless ( defined($rv) ) {
+			$this->log( "warning", "Can't execute SQL " . $this->conf->{auth}->{query_system_id} . ". Trying to reconnect." );
+			$this->_connect_db();
+			$sth = $this->authdbh->prepare( $this->conf->{auth}->{query_system_id} );
+			$rv  = $sth->execute($login);
+			unless ( defined($rv) ) {
+				return undef;
+			}
+		}
 
 		# Try to get one row or return undef
 		if ( my $res = $sth->fetchrow_hashref() ) {
@@ -568,15 +586,9 @@ sub _connect_db {
 	my $user   = $this->conf->{'auth'}->{'db-user'};
 	my $passwd = $this->conf->{'auth'}->{'db-password'};
 
-	# $this->speak("[$$] Current DSN='".$dsn."'");
-
 	# If DBMS isn' t accessible - try reconnect
 	if ( !$this->authdbh or !$this->authdbh->ping ) {
 		$this->authdbh( DBI->connect_cached( $dsn, $user, $passwd ) );
-
-		#		$this->authdbh->do("SET CLIENT_ENCODING TO 'UTF-8'");
-		#		$this->authdbh->do("SET DATESTYLE TO 'ISO'");
-
 	}
 
 	if ( !$this->authdbh ) {
@@ -1612,14 +1624,14 @@ sub _process_out_queue {
 				last;
 			}
 		}
-		
-		unless ( defined ( $mo->{'system_id'} ) ) {
-			# ESME was not connected from server start. 
-			# Information about it not found in our memory. 
-			# Situation: Not connected. Return ERROR. 
-			$this->log("info","ESME with ID # " .$mo->{'esme_id'} . " was not connected yet.");
-			print $output_socket "ERROR\n"; 
-			return undef; 
+
+		unless ( defined( $mo->{'system_id'} ) ) {
+			# ESME was not connected from server start.
+			# Information about it not found in our memory.
+			# Situation: Not connected. Return ERROR.
+			$this->log( "info", "ESME with ID # " . $mo->{'esme_id'} . " was not connected yet." );
+			print $output_socket "ERROR\n";
+			return undef;
 
 		}
 		# Looking for proper ESME connect

@@ -71,17 +71,22 @@ use Benchmark ':hireswallclock';
 
 my $t1 = new Benchmark; 
 
+my $tt0 = [gettimeofday];
+
 for (my $i = 0; $i < $count; $i++) { 
 	# Test No. 4: Send SM
 	$seq = $cli->submit_sm( 'data_coding' => ( $coding << 2 )  , 'source_addr' => 'smppsvrtst.pl', 'destination_addr' => '380504139380', short_message => $text ) or die;
 	$pdu = $cli->read_pdu() or die;
 } 
 
+my $elapsed = tv_interval ( $tt0, [ gettimeofday ] );
 my $t2 = new Benchmark; 
-
+my $smspersec = $count / $elapsed; 
 print "Sent " . $count . " messages. \n"; 
-print "Used " . timestr (timediff ($t2, $t1), 'all'); 
+print "Used " . timestr (timediff ($t2, $t1), 'all') . "\n";  
+print "Rate ~~ " . $smspersec  . "\n"; 
 print "\n"; 
+
 
 
 $cli->unbind();

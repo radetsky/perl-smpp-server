@@ -67,10 +67,11 @@ our @EXPORT_OK = qw();
 #-----------------------------------------------------------------------
 sub new {
 
-	my ( $class, %params ) = @_;
+	my ( $class, $conf ) = @_;
 
 	my $this = $class->SUPER::new();
 
+	$this->{conf} = $conf;
 	$this->_connect_db();
 
 	return $this;
@@ -104,33 +105,49 @@ sub _put_mt {
 	$mt = $this->_validate_mt($mt);
 	$mt = $this->_convert_mt($mt);
 
-	unless (
-		defined(
-			$this->{'msgsth'}->execute(
-				$mt->{'msg_type'},
-				$mt->{'esme_id'},
-				$mt->{'src_addr'},
-				$mt->{'dst_addr'},
-				$mt->{'body'},
-				$mt->{'coding'},
-				$mt->{'udh'},
-				$mt->{'mwi'},
-				$mt->{'mclass'},
-				$mt->{'message_id'},
-				$mt->{'validity'},
-				$mt->{'dereffed'},
-				$mt->{'registered_delivery'},
-				$mt->{'service_type'},
-				$mt->{'extra'},
-				$mt->{'received'},
+	my $rv = $this->{'msgsth'}->execute(
+		$mt->{'msg_type'},
+		$mt->{'esme_id'},
+		$mt->{'src_addr'},
+		$mt->{'dst_addr'},
+		$mt->{'body'},
+		$mt->{'coding'},
+		$mt->{'udh'},
+		$mt->{'mwi'},
+		$mt->{'mclass'},
+		$mt->{'message_id'},
+		$mt->{'validity'},
+		$mt->{'dereffed'},
+		$mt->{'registered_delivery'},
+		$mt->{'service_type'},
+		$mt->{'extra'},
+		$mt->{'received'},
 
-			)
-		)
-	  )
-	{
-		return undef;
-	} ## end unless ( defined( $this->msgsth...
+	);
+	unless ( defined($rv) ) {
+		# try to reconnect and once again
+		$this->_connect_db();
+		$rv = $this->{'msgsth'}->execute(
+			$mt->{'msg_type'},
+			$mt->{'esme_id'},
+			$mt->{'src_addr'},
+			$mt->{'dst_addr'},
+			$mt->{'body'},
+			$mt->{'coding'},
+			$mt->{'udh'},
+			$mt->{'mwi'},
+			$mt->{'mclass'},
+			$mt->{'message_id'},
+			$mt->{'validity'},
+			$mt->{'dereffed'},
+			$mt->{'registered_delivery'},
+			$mt->{'service_type'},
+			$mt->{'extra'},
+			$mt->{'received'},
 
+		);
+		unless ( defined($rv) ) { return undef; }
+	} ## end unless ( defined($rv) )
 	return 1;
 
 } ## end sub _put_mt
@@ -220,18 +237,16 @@ sub _connect_db {
 	}
 
 	# If DBMS isn' t accessible - try reconnect
-
-	unless ( defined ( $this->{'msgdbh'} ) ) { 
-		$this->{'msgdbh'} = DBI->connect_cached ( $dsn, $user, $passwd ); 
-	} 
-	unless ( $this->{'msgdbh'}->ping ) { 
-		$this->{'msgdbh'} = DBI->connect_cached ( $dsn, $user, $passwd ); 
-	} 
-	if ( !$this->{'msgdbh'} ) {
-			$this->speak("Cant connect to DBMS!");
-			$this->log( "error", "Cant connect to DBMS!" );
-			return undef;
+	unless ( defined( $this->{'msgdbh'} ) ) {
+		$this->{'msgdbh'} = DBI->connect_cached( $dsn, $user, $passwd );
+		unless ( defined( $this->{'msgdbh'} ) ) {
+			die "Can't connect to $dsn.\n";
+		}
 	}
+	unless ( $this->{'msgdbh'}->ping ) {
+		$this->{'msgdbh'} = DBI->connect_cached( $dsn, $user, $passwd );
+	}
+
 	my $sql = "insert into " . $table . " ( msg_type, esme_id, src_addr, dst_addr, body, coding, udh, mwi, mclass, message_id, validity, deferred, registered_delivery, service_type, extra, received ) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,? ) ";
 	$this->{'msgsth'} = $this->{'msgdbh'}->prepare_cached($sql);
 	return 1;

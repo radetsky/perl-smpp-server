@@ -263,6 +263,7 @@ Look in edr.sql
 
 ATTENTION: if '<edr> type' will be unavailable then event logging will disabled. 
 
+Much optimized code. Now forking only once. 
 
 
 

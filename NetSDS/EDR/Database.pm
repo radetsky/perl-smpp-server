@@ -154,7 +154,7 @@ sub write {
 	if ( (@local_cache > 2000) or ($td > 2 ) ) { 
 		#warn "EDR::Database flushing cache."; 
 		foreach my $cache_record (@local_cache) { 
-			$this->sth->execute ( @$cache_record ); 
+			my $rv = $this->sth->execute ( @$cache_record ); 
 		}
 		@local_cache = (); 
 	}
