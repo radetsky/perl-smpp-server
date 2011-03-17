@@ -1857,6 +1857,28 @@ sub _process_socket {
 
 } ## end sub _process_socket
 
+=item B<cmd_unknown> 
+
+Method for unknown PDU.  
+
+=cut 
+
+sub cmd_unknown {
+
+	my ( $this, $pdu, $hdl ) = @_;
+
+	$this->speak( "Unknown PDU arrived from " . $hdl->{id} );
+	$this->log( "warning", "Unknown PDU received, sending generic_nack" );
+	$this->log( "warning", Dumper ($pdu) ); 
+
+	my $resp = $hdl->{smpp}->generic_nack(
+		seq    => $pdu->{seq},
+		status => 0x00000003,    # ESME_RINVCMDID
+	);
+
+}
+
+
 sub _kick {
 	my $this = shift;
 
