@@ -1297,7 +1297,7 @@ sub _authorize_esme {
 	}
 
 	unless ( defined( $this->_increase_already_connected($login) ) ) {
-		return 0x0000000D;    # ESME_RBINDFAIL
+		return 0x00000005;    # ESME_RALYBND
 	}
 
 	return 0x00000000;        # OK
@@ -1867,7 +1867,7 @@ sub cmd_unknown {
 
 	my ( $this, $pdu, $hdl ) = @_;
 
-	$this->speak( "Unknown PDU arrived from " . $hdl->{id} );
+	$this->speak(" [$$] Unknown PDU arrived from " . $hdl->{id} );
 	$this->log( "warning", "Unknown PDU received, sending generic_nack" );
 	$this->log( "warning", Dumper ($pdu) ); 
 
@@ -1878,6 +1878,20 @@ sub cmd_unknown {
 
 }
 
+=item B<cmd_generic_nack> 
+
+When got generic_nack PDU ignore it, but log event about it.  
+
+=cut 
+
+sub cmd_generic_nack { 
+
+	my ( $this, $pdu, $hdl ) = @_; 
+
+	$this->speak( "[$$] Generic NACK arrived from " . $hdl->{id} ); 
+	$this->log ("warning","Generic NACK arrived from " . $hdl->{id} . " Ignoring it."); 
+
+}
 
 sub _kick {
 	my $this = shift;

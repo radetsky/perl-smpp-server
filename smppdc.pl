@@ -119,7 +119,7 @@ sub _get_cli_param {
 	my $conf  = undef;
 	my $debug = undef;
 	my $kick  = undef;
-    my $reload = undef; 
+    	my $reload = undef; 
 
 	# Get command line arguments
 	GetOptions(
