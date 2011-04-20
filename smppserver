@@ -60,6 +60,8 @@ use POSIX qw(floor);
 use Encode;
 use Socket;
 use IO::Handle;
+use POSIX ":sys_wait_h";
+
 
 # SMPP PDU command_id table
 use constant cmd_tab => {
@@ -174,8 +176,9 @@ sub initialize {
 		$this->log( "info", "SIGUSR1 caught" );
 		$this->_kick();      # Seek and destrou
 		$this->_reload();    # Reload users configuration
-
 	};
+	$SIG{CHLD} = \&{$this->REAPER};
+	
 	# Initialize signals processing
 	# $this->set_signal_processors();
 
@@ -203,6 +206,19 @@ sub initialize {
 	$this->_edr_init();
 
 } ## end sub initialize
+
+sub REAPER {
+	  my $this = shift; 
+		
+	  my $child; 
+		while (( my $pid = waitpid (-1,WNOHANG)) > 0) { 
+			$this->speak("[$$] Child with PID: $pid died with exit code: $? $! ");
+			$this->log("warning"," Child with PID: $pid died with exit code: $? $! ");
+		  grep { $_ != $pid } @CHILDREN; # CleanUp the array
+	    $this->_burn_children(); 		
+	  }
+		$SIG{CHLD} = \&REAPER;
+}
 
 sub _edr_init {
 	my $this = shift;
@@ -257,11 +273,18 @@ sub _edr_write {
 
 }
 
-sub _burn_children {
+=item B< _burn_children > 
 
+This method forks and run sun process with one task: read database for MO and DLR messages 
+and deliver it to father process that will execute deliver_sm SMPP procedure. 
+
+May be later SMPP will burn more than one process, but still it is. 
+
+=cut 
+
+sub _burn_children {
 	my ( $this, %params ) = @_;
 
-	# Out Q
 	$this->speak("[$$] Forking Outgoing Queue Plugin");
 	my $socket_child  = undef;
 	my $socket_parent = undef;
@@ -276,40 +299,18 @@ sub _burn_children {
 	}
 	if ( $pid == 0 ) {
 		$this->speak("[$$] Running NetSDS::App::SMSTradeOutQ");
+		$this->log("info"," Running NetSDS::App::SMSTradeOutQ");
 		close $socket_child;
 		my $smsout = new NetSDS::App::SMSTradeOutQ();
 		$smsout->{conf}          = $this->{conf};
 		$smsout->{server_socket} = $socket_parent;
 		$smsout->run();
+		$this->log("warning"," NetSDS::App::SMSTradeOutQ died." ); 
 		die "[$$] NetSDS::App::SMSTradeOutQ died.";
 	}
 	push @CHILDREN, $pid;
 	close $socket_parent;
 	$this->{'socket_out_queue'} = $socket_child;
-
-	#	# In Q
-	#	socketpair($socket_child, $socket_parent, AF_UNIX, SOCK_STREAM, PF_UNSPEC );
-	#	$socket_child->autoflush(1);
-	#	$socket_parent->autoflush(1);
-
-	#	$this->speak("[$$] Forking Incoming Queue Plugin");
-	#	$pid = fork();
-	#	unless ( defined($pid) ) {
-	#		die "[$$] Fork() for Incoming Queue Plugin failed: $!";
-	#	}
-	#	if ( $pid == 0 ) {
-	#		$this->speak("[$$] Running NetSDS::App::SMSTradeInQ");
-	#		close $socket_child;
-	#
-	#	my $smsin = new NetSDS::App::SMSTradeInQ();
-	#	$smsin->{conf} = $this->{conf};
-	#	$smsin->{server_socket} = $socket_parent;
-	#	$smsin->run();
-	#	die "[$$] NetSDS::App::SMSTradeInQ died.";
-	#	}
-	#	close $socket_parent;
-	#	$this->{socket_in_queue} = $socket_child;
-	#	push @CHILDREN, $pid;
 
 } ## end sub _burn_children
 
@@ -1703,7 +1704,6 @@ sub _deliver_sm {
 		my $msg_text         = $mo->{text};
 
 		# Set right data_coding field.
-
 		my $data_coding = $mo->{coding};
 		if ( $data_coding < 3 ) {
 			$data_coding = ( $data_coding << 2 ) & 0b00001100;
@@ -1714,10 +1714,11 @@ sub _deliver_sm {
 		$this->log( "info", "MO Dump: " . Dumper($mo) );
 
 		# Send deliver_sm
-		if (    ( $esm_class == 4 )
+		if (    ( $esm_class == 4 )   
 			and ( defined( $mo->{message_state} ) )
 			and ( defined( $mo->{receipted_message_id} ) ) )
-		{    # DLR
+		{    
+		  # DLR
 			$hdl->{smpp}->deliver_sm(
 				source_addr_ton      => $source_addr_ton,             # International (MSISDN)
 				source_addr_npi      => $source_addr_npi,             # E.164
@@ -1733,7 +1734,7 @@ sub _deliver_sm {
 				receipted_message_id => $mo->{receipted_message_id}
 			);
 		} else {
-
+      # MO 
 			$hdl->{smpp}->deliver_sm(
 				source_addr_ton  => $source_addr_ton,                 # International (MSISDN)
 				source_addr_npi  => $source_addr_npi,                 # E.164
