@@ -63,6 +63,10 @@ sub new {
 	$this->{encoder} = JSON->new();
 	$this->{encoder}->utf8(1); 
 
+	$this->{'dsn'} = $params{dsn}; 
+	$this->{'dbuser'} = $params{user}; 
+	$this->{'dbpass'} = $params{password}; 
+
 	unless ( defined ( $this->_connect_db($params{dsn},$params{user},$params{password}) ) ) { 
 		return $class->error("Can't connect to the database: ".$params{dsn});
 	}
@@ -91,8 +95,14 @@ sub _connect_db {
 
 	my ( $this, $dsn, $user, $password ) = @_;
 
+	unless ( defined ($dsn ) ) { 
+		$dsn = $this->{'dsn'}; 
+		$user = $this->{'dbuser'}; 
+		$password = $this->{'dbpass'}; 
+	}
+
 	if ( !$this->dbh or !$this->dbh->ping) { 
-		$this->dbh ( DBI->connect_cached ($dsn, $user, $password ) ); 
+		$this->dbh ( DBI->connect_cached ($dsn, $user, $password, { RaiseError => 1 } ) ); 
 
 		if (!$this->dbh) { 
 			return undef; 
@@ -153,8 +163,15 @@ sub write {
 	my $td = $current_time - $previous_time; 
 	if ( (@local_cache > 2000) or ($td > 2 ) ) { 
 		#warn "EDR::Database flushing cache."; 
-		foreach my $cache_record (@local_cache) { 
-			my $rv = $this->sth->execute ( @$cache_record ); 
+		foreach my $cache_record (@local_cache) {
+			my $rv; 
+			eval { 
+				$rv = $this->sth->execute ( @$cache_record ); 
+			}; 
+			if ($@) { 
+				$this->_connect_db;
+				$rv = $this->sth->execute ( @$cache_record ); 
+			}
 		}
 		@local_cache = (); 
 	}

@@ -105,7 +105,10 @@ sub _put_mt {
 	$mt = $this->_validate_mt($mt);
 	$mt = $this->_convert_mt($mt);
 
-	my $rv = $this->{'msgsth'}->execute(
+	my $rv; 
+
+	eval { 
+	$rv = $this->{'msgsth'}->execute(
 		$mt->{'msg_type'},
 		$mt->{'esme_id'},
 		$mt->{'src_addr'},
@@ -122,9 +125,10 @@ sub _put_mt {
 		$mt->{'service_type'},
 		$mt->{'extra'},
 		$mt->{'received'},
+		); 
+	}; 
 
-	);
-	unless ( defined($rv) ) {
+	if  ($@ ) {
 		# try to reconnect and once again
 		$this->_connect_db();
 		$rv = $this->{'msgsth'}->execute(
@@ -144,7 +148,6 @@ sub _put_mt {
 			$mt->{'service_type'},
 			$mt->{'extra'},
 			$mt->{'received'},
-
 		);
 		unless ( defined($rv) ) { return undef; }
 	} ## end unless ( defined($rv) )
@@ -238,13 +241,13 @@ sub _connect_db {
 
 	# If DBMS isn' t accessible - try reconnect
 	unless ( defined( $this->{'msgdbh'} ) ) {
-		$this->{'msgdbh'} = DBI->connect_cached( $dsn, $user, $passwd );
+		$this->{'msgdbh'} = DBI->connect_cached( $dsn, $user, $passwd, { RaiseError => 1 }  );
 		unless ( defined( $this->{'msgdbh'} ) ) {
 			die "Can't connect to $dsn.\n";
 		}
 	}
 	unless ( $this->{'msgdbh'}->ping ) {
-		$this->{'msgdbh'} = DBI->connect_cached( $dsn, $user, $passwd );
+		$this->{'msgdbh'} = DBI->connect_cached( $dsn, $user, $passwd, { RaiseError => 1 } );
 	}
 
 	my $sql = "insert into " . $table . " ( msg_type, esme_id, src_addr, dst_addr, body, coding, udh, mwi, mclass, message_id, validity, deferred, registered_delivery, service_type, extra, received ) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,? ) ";
@@ -252,6 +255,16 @@ sub _connect_db {
 	return 1;
 
 } ## end sub _connect_db
+
+sub _disconnect_db { 
+	my $this = shift; 
+
+	$this->{'msgdbh'}->disconnect; 
+	$this->{'msgdbh'} = undef; 
+
+	return 1; 
+
+}
 
 1;
 

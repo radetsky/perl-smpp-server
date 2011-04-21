@@ -138,7 +138,9 @@ sub run {
 		unless ( defined( $this->shm ) ) {
 			my $shared = $this->_init_shm();
 			unless ( defined ($shared) ) { 
-				return undef;
+				$this->log("warning","Waiting 1 second for access to the shared memory segment."); 
+				sleep(1); 
+				next; 
 			}
 		}
 
@@ -300,11 +302,10 @@ sub _connect_db {
 		# If DBMS isn' t accessible - try reconnect
 
 		if ( !$this->msgdbh or !$this->msgdbh->ping ) {
-			$this->msgdbh( DBI->connect_cached( $dsn, $user, $passwd ) );
+			$this->msgdbh( DBI->connect_cached( $dsn, $user, $passwd, { RaiseError => 1 } ) );
 		}
 
 		if ( !$this->msgdbh ) {
-			$this->speak("Cant connect to DBMS! Waiting for 30 sec.");
 			$this->log( "error", "Cant connect to DBMS! Waiting for 30 sec." );
 			sleep(30);
 			next;

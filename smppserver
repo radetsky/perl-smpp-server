@@ -177,7 +177,9 @@ sub initialize {
 		$this->_kick();      # Seek and destrou
 		$this->_reload();    # Reload users configuration
 	};
-	$SIG{CHLD} = \&{$this->REAPER};
+	$SIG{CHLD} = sub { 
+		$this->REAPER; 
+	};  
 	
 	# Initialize signals processing
 	# $this->set_signal_processors();
@@ -209,15 +211,22 @@ sub initialize {
 
 sub REAPER {
 	  my $this = shift; 
-		
+
 	  my $child; 
 		while (( my $pid = waitpid (-1,WNOHANG)) > 0) { 
 			$this->speak("[$$] Child with PID: $pid died with exit code: $? $! ");
 			$this->log("warning"," Child with PID: $pid died with exit code: $? $! ");
-		  grep { $_ != $pid } @CHILDREN; # CleanUp the array
-	    $this->_burn_children(); 		
+		    grep { $_ != $pid } @CHILDREN; # CleanUp the array
+			close $this->{'socket_out_queue'}; 
+			$this->_disconnect_db;
+			$this->{'plugindb'}->_disconnect_db; 
+	        $this->_burn_children();
+			$this->_connect_db; 
+			$this->{'plugindb'}->_connect_db; 
 	  }
-		$SIG{CHLD} = \&REAPER;
+	  $SIG{CHLD} = sub { 
+		  $this->REAPER; 
+	  }; 
 }
 
 sub _edr_init {
@@ -615,7 +624,7 @@ sub _connect_db {
 
 	# If DBMS isn' t accessible - try reconnect
 	if ( !$this->authdbh or !$this->authdbh->ping ) {
-		$this->authdbh( DBI->connect_cached( $dsn, $user, $passwd ) );
+		$this->authdbh( DBI->connect_cached( $dsn, $user, $passwd, { RaiseError => 1 }  ) );
 	}
 
 	if ( !$this->authdbh ) {
@@ -628,6 +637,11 @@ sub _connect_db {
 
 } ## end sub _connect_db
 
+sub _disconnect_db { 
+	my $this = shift; 
+	$this->authdbh->disconnect; 	
+	$this->authdbh ( undef );  
+}
 =item B<_init_out_queue) 
 
 Connects to socket of Mobile Terminated Queue Hadler. 
@@ -1624,10 +1638,9 @@ sub _process_out_queue {
 		$this->speak("Keepalive from queue server");
 		return 1;
 	}
-
 	my $mo = decode_json( conv_base64_str($line) );
-
 	$this->log( "info", "got SM from OutQ:" . Dumper($mo) ) if ( $this->{debug} );
+	$this->log( "info", "got MO/DLR from OutQ for ESME_ID: ". $mo->{'esme_id'} ); 
 
 	# Check if exist in MO esme_id
 	unless ( defined( $mo->{'esme_id'} ) ) {
@@ -1642,7 +1655,6 @@ sub _process_out_queue {
 				last;
 			}
 		}
-
 		unless ( defined( $mo->{'system_id'} ) ) {
 			# ESME was not connected from server start.
 			# Information about it not found in our memory.
@@ -1668,13 +1680,14 @@ sub _process_out_queue {
 		}
 
 		if ( $esme_connect_found <= 0 ) {
-			$this->speak( "[$$] ESME " . $mo->{'system_id'} . "not found in active list. " );
 			$this->log( "warning", "ESME " . $mo->{'system_id'} . "not found in active list. " );
 			print $output_socket "ERROR\n";
 		} else {
 			my $hdl_index = rand($esme_connect_found);          # Select random connect
 			my $hdl       = $esme_connects[$hdl_index];
+			$this->log("info","Sending SM to '".$hdl->{system_id}."'");
 			my $dlvrd     = $this->_deliver_sm( $hdl, $mo );    # send deliver_sm to ESME
+			$this->log("info","Confirm delivery to OutQ");
 			unless ( defined($dlvrd) ) {
 				print $output_socket "ERROR\n";
 			} else {

@@ -164,7 +164,7 @@ if ($cli) {
 $seq = $cli2->bind_transceiver( system_id => 'SMSGW', password => 'secret' ) or die;
 $pdu = $cli2->read_pdu() or die;
 #warn Dumper ($pdu);
-if ( ( $pdu->{status} == 0x0E) or ($pdu->{status} == 0x0D ) ) {          ## STATUS
+if ( ( $pdu->{status} == 0x0E) or ($pdu->{status} == 0x0D ) or ($pdu->{status} == 0x05) ) {          ## STATUS
 	print "ok 11: can't connect more than 1 time for SMSGW with NULL (default 1) max_connections.\n"; 
 } else { 
 	warn Dumper ($pdu); 
