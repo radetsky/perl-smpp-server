@@ -22,13 +22,14 @@
 use 5.8.0;
 use strict;
 use warnings;
+#use diagnostics qw(-verbose -warntrace);
 
 SMPPServerV2->run(
 	daemon      => undef,
 	verbose     => 1,
 	use_pidfile => 1,
 	has_conf    => 1,
-	debug       => undef,
+	debug       => 1,
 	conf_file   => "./smppserver.conf",
 );
 
@@ -48,8 +49,7 @@ use NetSDS::Util::DateTime;
 use NetSDS::Util::String;
 use NetSDS::Util::Misc;
 use NetSDS::Queue;
-use NetSDS::App::SMSTradeOutQ;
-#use NetSDS::App::SMSTradeInQ;
+use NetSDS::App::SMSTradeOutDB;
 use NetSDS::App::SMSTradeInDB;
 use IPC::ShareLite qw ( :lock );
 use JSON;
@@ -106,33 +106,22 @@ sub initialize {
 	# Get CLI parameters
 	$this->_get_cli_param();
 
-	# Create syslog handler
-	if ( !$this->logger ) {
-		$this->logger( NetSDS::Logger->new( name => $this->{name} ) );
-		$this->log( "info", "Logger started" );
-	}
-
 	# Initialize configuration
 	if ( $this->{has_conf} ) {
-
 		# Automatically determine configuration file name
 		if ( !$this->{conf_file} ) {
 			$this->{conf_file} = $this->config_file( $this->{name} . ".conf" );
 		}
-
 		# Get configuration file
 		if ( my $conf = NetSDS::Conf->getconf( $this->{conf_file} ) ) {
 			$this->conf($conf);
-			$this->log( "info", "Configuration file read OK: " . $this->{conf_file} );
 		} else {
-			$this->log( "error", "Can't read configuration file: " . $this->{conf_file} );
+			die ("Can't read configuration file: " . $this->{conf_file} );
 		}
-
 		# Add automatic features
 		if ( $this->auto_features ) {
 			$this->use_auto_features();
 		}
-
 	} ## end if ( $this->{has_conf})
 
 	# Daemonize, if needed
@@ -141,6 +130,13 @@ sub initialize {
 		$this->{verbose} = undef;
 		Proc::Daemon::Init;
 	}
+
+	# Create syslog handler
+	if ( !$this->logger ) {
+		$this->logger( NetSDS::Logger->new( name => $this->{name} ) );
+		$this->log( "info", "Logger started" );
+	}
+
 
 	# Process PID file if necessary
 	if ( $this->use_pidfile ) {
@@ -153,47 +149,29 @@ sub initialize {
 	# Update PID if necessary
 	$this->{pid} = $$;
 
-	$this->_burn_children();
+	# Выкинули нафиг где обработчики сигналов, потому что детей у этого процесса больше не будет.
+	# Оставляем только ALRM для генерации прерываний по проверке наличия исходящих сообщений. 
 
-	# Add signal handlers
-	$SIG{INT} = sub {
-		$this->speak("SIGINT caught");
-		$this->log( "warn", "SIGINT caught" );
-		my $perm = kill "TERM" => @CHILDREN;
-		$this->speak("Sent TERM to $perm processes");
-		$this->{to_finalize} = 1;
-	};
+	$SIG{ALRM} = sub {
+		$this->_process_mo_dlr();
+		alarm 1; 
+	}; 
+	# Initialize SHM area
+	$this->_init_shm();
 
-	$SIG{TERM} = sub {
-		$this->speak("SIGTERM caught");
-		$this->log( "warn", "SIGTERM caught" );
-		my $perm = kill "TERM" => @CHILDREN;
-		$this->speak("Sent TERM to $perm processes");
-		$this->{to_finalize} = 1;
-	};
-	$SIG{USR1} = sub {
-		$this->speak("SIGUSR1 caught");
-		$this->log( "info", "SIGUSR1 caught" );
-		$this->_kick();      # Seek and destrou
-		$this->_reload();    # Reload users configuration
-	};
-	$SIG{CHLD} = sub { 
-		$this->REAPER; 
-	};  
-	
-	# Initialize signals processing
-	# $this->set_signal_processors();
+	# Initialize Event Data Recording subsystem 
+	$this->_edr_init();
 
 	# Create select() handler for incoming events
 	$this->selector( IO::Select->new() );
 
-	# Initialize queue listener for outgoing events
-	# $this->_init_out_queue();
-	$this->selector->add( $this->{'socket_out_queue'} );
-
 	# Initialize queue for incoming (MT) events
 	my $plugindb = NetSDS::App::SMSTradeInDB->new( $this->{conf} );
 	$this->{'plugindb'} = $plugindb;
+
+	# Initialize MO/DLR selector 
+	my $plugoutdb = NetSDS::App::SMSTradeOutDB->new ($this->shm, $this->{conf} ); 
+	$this->{'plugoutdb'} = $plugoutdb; 
 
 	# Initialize listening socket and add to select()
 	$this->_init_listener();
@@ -202,32 +180,23 @@ sub initialize {
 	# Set initial empty array of handlers hashref
 	$this->handlers( {} );
 
-	# Initialize SHM area
-	$this->_init_shm();
-
-	$this->_edr_init();
-
 } ## end sub initialize
 
-sub REAPER {
-	  my $this = shift; 
+sub _process_mo_dlr { 
+	my $this = shift;
 
-	  my $child; 
-		while (( my $pid = waitpid (-1,WNOHANG)) > 0) { 
-			$this->speak("[$$] Child with PID: $pid died with exit code: $? $! ");
-			$this->log("warning"," Child with PID: $pid died with exit code: $? $! ");
-		    grep { $_ != $pid } @CHILDREN; # CleanUp the array
-			close $this->{'socket_out_queue'}; 
-			$this->_disconnect_db;
-			$this->{'plugindb'}->_disconnect_db; 
-	        $this->_burn_children();
-			$this->_connect_db; 
-			$this->{'plugindb'}->_connect_db; 
-	  }
-	  $SIG{CHLD} = sub { 
-		  $this->REAPER; 
-	  }; 
-}
+	my $messages = $this->{'plugoutdb'}->_process_mo_dlr();
+	if ($messages == 0) { 
+		return;
+	}
+    foreach my $somekey  ( keys %$messages ) { 
+			my $queue_msg = $messages->{$somekey};
+			my $delivered = $this->_process_out_message ($queue_msg); 
+			if ( defined ($delivered ) ) { 
+				$this->{'plugoutdb'}->_delete_mo($queue_msg->{'internal_id'});#delete if ok 
+			}
+	}
+} 
 
 sub _edr_init {
 	my $this = shift;
@@ -282,46 +251,6 @@ sub _edr_write {
 
 }
 
-=item B< _burn_children > 
-
-This method forks and run sun process with one task: read database for MO and DLR messages 
-and deliver it to father process that will execute deliver_sm SMPP procedure. 
-
-May be later SMPP will burn more than one process, but still it is. 
-
-=cut 
-
-sub _burn_children {
-	my ( $this, %params ) = @_;
-
-	$this->speak("[$$] Forking Outgoing Queue Plugin");
-	my $socket_child  = undef;
-	my $socket_parent = undef;
-
-	socketpair( $socket_child, $socket_parent, AF_UNIX, SOCK_STREAM, PF_UNSPEC );
-	$socket_child->autoflush(1);
-	$socket_parent->autoflush(1);
-
-	my $pid = fork();
-	unless ( defined($pid) ) {
-		die "[$$] Fork() for Outgoing Queue Plugin failed: $!";
-	}
-	if ( $pid == 0 ) {
-		$this->speak("[$$] Running NetSDS::App::SMSTradeOutQ");
-		$this->log("info"," Running NetSDS::App::SMSTradeOutQ");
-		close $socket_child;
-		my $smsout = new NetSDS::App::SMSTradeOutQ();
-		$smsout->{conf}          = $this->{conf};
-		$smsout->{server_socket} = $socket_parent;
-		$smsout->run();
-		$this->log("warning"," NetSDS::App::SMSTradeOutQ died." ); 
-		die "[$$] NetSDS::App::SMSTradeOutQ died.";
-	}
-	push @CHILDREN, $pid;
-	close $socket_parent;
-	$this->{'socket_out_queue'} = $socket_child;
-
-} ## end sub _burn_children
 
 sub start {
 
@@ -348,6 +277,7 @@ sub start {
 		$LOCAL_SYSTEM_ID = $this->conf->{'smpp'}->{'local_system_id'};
 	}
 
+	alarm 1; 
 } ## end sub start
 
 sub _auth_esme {
@@ -632,7 +562,8 @@ sub _connect_db {
 		$this->log( "error", "Cant connect to DBMS!" );
 		return undef;
 	}
-
+	
+	$this->log("warning","DB Connected!"); 
 	return 1;
 
 } ## end sub _connect_db
@@ -642,165 +573,6 @@ sub _disconnect_db {
 	$this->authdbh->disconnect; 	
 	$this->authdbh ( undef );  
 }
-=item B<_init_out_queue) 
-
-Connects to socket of Mobile Terminated Queue Hadler. 
-
-=cut 
-
-sub _init_out_queue {
-
-	my ( $this, %params ) = @_;
-
-	use constant OUT_QUEUE_ADDR  => '127.0.0.1';
-	use constant OUT_QUEUE_PORT  => '9999';
-	use constant OUT_QUEUE_PROTO => 'tcp';
-
-	my $out_queue_addr  = undef;
-	my $out_queue_port  = undef;
-	my $out_queue_proto = undef;
-
-	unless ( defined( $this->conf->{'out_queue'}->{'addr'} ) ) {
-		$out_queue_addr = OUT_QUEUE_ADDR;
-	} else {
-		$out_queue_addr = $this->conf->{'out_queue'}->{'addr'};
-	}
-
-	unless ( defined( $this->conf->{'out_queue'}->{'port'} ) ) {
-		$out_queue_port = OUT_QUEUE_PORT;
-	} else {
-		$out_queue_port = $this->conf->{'out_queue'}->{'port'};
-	}
-
-	unless ( defined( $this->conf->{'out_queue'}->{'proto'} ) ) {
-		$out_queue_proto = OUT_QUEUE_PROTO;
-	} else {
-		$out_queue_proto = $this->conf->{'out_queue'}->{'proto'};
-	}
-
-	# Connect to remote socket
-
-	my $connect_failed = 0;
-
-	out_queue_connect:
-
-	$this->out_queue(
-		IO::Socket::INET->new(
-			PeerAddr => $out_queue_addr,
-			PeerPort => $out_queue_port,
-			Proto    => $out_queue_proto,
-		)
-	);
-
-	unless ( defined( $this->out_queue ) ) {
-		sleep(1);
-		$connect_failed++;
-		if ( $connect_failed > 5 ) {
-
-			$this->log(
-				"error",
-				sprintf(
-					"Cant connect to ougoing queue server at %s:%s/%s",
-					$out_queue_addr,
-					$out_queue_port,
-					$out_queue_proto
-				)
-			);
-
-			die(
-				sprintf(
-					"ERROR! Cant connect to outgoing queue server at %s:%s/%s",
-					$out_queue_addr,
-					$out_queue_port,
-					$out_queue_proto
-				)
-			);
-		} ## end if ( $connect_failed >...
-		goto out_queue_connect;
-	} ## end unless ( defined( $this->out_queue...
-
-	$this->out_queue->autoflush(1);
-
-	$this->log( "info", "Successfully connected to OUT Queue server" );
-
-} ## end sub _init_out_queue
-
-sub _init_in_queue {
-
-	my ( $this, %params ) = @_;
-
-	use constant IN_QUEUE_ADDR  => '127.0.0.1';
-	use constant IN_QUEUE_PORT  => '9998';
-	use constant IN_QUEUE_PROTO => 'tcp';
-
-	my $in_queue_addr  = undef;
-	my $in_queue_port  = undef;
-	my $in_queue_proto = undef;
-
-	unless ( defined( $this->conf->{'in_queue'}->{'addr'} ) ) {
-		$in_queue_addr = IN_QUEUE_ADDR;
-	} else {
-		$in_queue_addr = $this->conf->{'in_queue'}->{'addr'};
-	}
-
-	unless ( defined( $this->conf->{'in_queue'}->{'port'} ) ) {
-		$in_queue_port = IN_QUEUE_PORT;
-	} else {
-		$in_queue_port = $this->conf->{'in_queue'}->{'port'};
-	}
-
-	unless ( defined( $this->conf->{'in_queue'}->{'proto'} ) ) {
-		$in_queue_proto = IN_QUEUE_PROTO;
-	} else {
-		$in_queue_proto = $this->conf->{'in_queue'}->{'proto'};
-	}
-
-	# Connect to remote socket
-
-	my $connect_failed = 0;
-
-	in_queue_connect:
-
-	$this->in_queue(
-		IO::Socket::INET->new(
-			PeerAddr => $in_queue_addr,
-			PeerPort => $in_queue_port,
-			Proto    => $in_queue_proto,
-		)
-	);
-
-	unless ( defined( $this->in_queue ) ) {
-		sleep(1);
-		$connect_failed++;
-		if ( $connect_failed > 5 ) {
-
-			$this->log(
-				"error",
-				sprintf(
-					"Cant connect to incoming queue server at %s:%s/%s",
-					$in_queue_addr,
-					$in_queue_port,
-					$in_queue_proto
-				)
-			);
-
-			die(
-				sprintf(
-					"ERROR! Cant connect to incoming queue server at %s:%s/%s",
-					$in_queue_addr,
-					$in_queue_port,
-					$in_queue_proto
-				)
-			);
-		} ## end if ( $connect_failed >...
-		goto in_queue_connect;
-	} ## end unless ( defined( $this->in_queue...
-
-	$this->in_queue->autoflush(1);
-
-	$this->log( "info", "Successfully connected to INcoming Queue server" );
-
-} ## end sub _init_in_queue
 
 =itemB<_authorize_submit> 
 
@@ -1127,15 +899,6 @@ sub cmd_submit_sm {
 			$queue_msg->{priority} = $pdu->{priority_flag} + 0;
 		}
 
-		# Encoding queue_msg to JSON pretty
-		# my $json_text = to_json( $queue_msg, { ascii => 1, pretty => 1 } );
-
-		# Sending to IN Queue
-		# my $res = $this->in_queue->print( conv_str_base64($json_text) . "\n" );
-		#
-		#$json_text = conv_str_base64($json_text)."\n";
-		#
-		#$resp_status = $this->_send_to_inq($json_text); # Around 50%;
 		my $res = $this->{'plugindb'}->_put_mt($queue_msg);
 		unless ( defined($res) ) {
 			$resp_status = 0x45;
@@ -1623,22 +1386,9 @@ sub cmd_bind_receiver {
 
 } ## end sub cmd_bind_receiver
 
-sub _process_out_queue {
-	my ( $this, %params ) = @_;
+sub _process_out_message {
+	my ( $this, $mo ) = @_;
 
-	my $output_socket = $this->{'socket_out_queue'};
-
-	# Try to get next line from Queue server over TCP socket
-	my $line = <$output_socket>;
-	unless ( defined($line) ) {
-		return undef;
-	}
-	# Return if keepalive
-	if ( $line =~ '-MARK-' ) {
-		$this->speak("Keepalive from queue server");
-		return 1;
-	}
-	my $mo = decode_json( conv_base64_str($line) );
 	$this->log( "info", "got SM from OutQ:" . Dumper($mo) ) if ( $this->{debug} );
 	$this->log( "info", "got MO/DLR from OutQ for ESME_ID: ". $mo->{'esme_id'} ); 
 
@@ -1660,7 +1410,6 @@ sub _process_out_queue {
 			# Information about it not found in our memory.
 			# Situation: Not connected. Return ERROR.
 			$this->log( "info", "ESME with ID # " . $mo->{'esme_id'} . " was not connected yet." );
-			print $output_socket "ERROR\n";
 			return undef;
 
 		}
@@ -1681,18 +1430,13 @@ sub _process_out_queue {
 
 		if ( $esme_connect_found <= 0 ) {
 			$this->log( "warning", "ESME " . $mo->{'system_id'} . "not found in active list. " );
-			print $output_socket "ERROR\n";
+			return undef; 
 		} else {
 			my $hdl_index = rand($esme_connect_found);          # Select random connect
 			my $hdl       = $esme_connects[$hdl_index];
 			$this->log("info","Sending SM to '".$hdl->{system_id}."'");
 			my $dlvrd     = $this->_deliver_sm( $hdl, $mo );    # send deliver_sm to ESME
-			$this->log("info","Confirm delivery to OutQ");
-			unless ( defined($dlvrd) ) {
-				print $output_socket "ERROR\n";
-			} else {
-				print $output_socket "OK\n";
-			}
+			return $dlvrd; 
 		}
 
 	} ## end else
@@ -1956,17 +1700,10 @@ sub main_loop {
 
 				no warnings 'uninitialized';
 
-				#			warn Dumper (\@readers);
-				#warn Dumper ($this->out_queue);
 				if ( $reader eq $this->listener ) {
 
 					# Process incoming connection
 					$this->_accept_incoming();
-
-				} elsif ( $reader eq $this->{'socket_out_queue'} ) {
-
-					# Process ougoing queue
-					$this->_process_out_queue();
 
 				} else {
 
