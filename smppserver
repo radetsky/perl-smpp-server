@@ -62,7 +62,6 @@ use Socket;
 use IO::Handle;
 use POSIX ":sys_wait_h";
 
-
 # SMPP PDU command_id table
 use constant cmd_tab => {
 	0x80000000 => 'generic_nack',
@@ -116,13 +115,13 @@ sub initialize {
 		if ( my $conf = NetSDS::Conf->getconf( $this->{conf_file} ) ) {
 			$this->conf($conf);
 		} else {
-			die ("Can't read configuration file: " . $this->{conf_file} );
+			die( "Can't read configuration file: " . $this->{conf_file} );
 		}
 		# Add automatic features
 		if ( $this->auto_features ) {
 			$this->use_auto_features();
 		}
-	} ## end if ( $this->{has_conf})
+	}
 
 	# Daemonize, if needed
 	if ( $this->daemon() ) {
@@ -137,7 +136,6 @@ sub initialize {
 		$this->log( "info", "Logger started" );
 	}
 
-
 	# Process PID file if necessary
 	if ( $this->use_pidfile ) {
 		if ( Proc::PID::File->running( dir => $this->pid_dir, name => $this->{name} ) ) {
@@ -150,16 +148,16 @@ sub initialize {
 	$this->{pid} = $$;
 
 	# Выкинули нафиг где обработчики сигналов, потому что детей у этого процесса больше не будет.
-	# Оставляем только ALRM для генерации прерываний по проверке наличия исходящих сообщений. 
+	# Оставляем только ALRM для генерации прерываний по проверке наличия исходящих сообщений.
 
 	$SIG{ALRM} = sub {
 		$this->_process_mo_dlr();
-		alarm 1; 
-	}; 
+		alarm 1;
+	};
 	# Initialize SHM area
 	$this->_init_shm();
 
-	# Initialize Event Data Recording subsystem 
+	# Initialize Event Data Recording subsystem
 	$this->_edr_init();
 
 	# Create select() handler for incoming events
@@ -169,9 +167,9 @@ sub initialize {
 	my $plugindb = NetSDS::App::SMSTradeInDB->new( $this->{conf} );
 	$this->{'plugindb'} = $plugindb;
 
-	# Initialize MO/DLR selector 
-	my $plugoutdb = NetSDS::App::SMSTradeOutDB->new ($this->shm, $this->{conf} ); 
-	$this->{'plugoutdb'} = $plugoutdb; 
+	# Initialize MO/DLR selector
+	my $plugoutdb = NetSDS::App::SMSTradeOutDB->new( $this->shm, $this->{conf} );
+	$this->{'plugoutdb'} = $plugoutdb;
 
 	# Initialize listening socket and add to select()
 	$this->_init_listener();
@@ -182,21 +180,21 @@ sub initialize {
 
 } ## end sub initialize
 
-sub _process_mo_dlr { 
+sub _process_mo_dlr {
 	my $this = shift;
 
 	my $messages = $this->{'plugoutdb'}->_process_mo_dlr();
-	if ($messages == 0) { 
+	if ( $messages == 0 ) {
 		return;
 	}
-    foreach my $somekey  ( keys %$messages ) { 
-			my $queue_msg = $messages->{$somekey};
-			my $delivered = $this->_process_out_message ($queue_msg); 
-			if ( defined ($delivered ) ) { 
-				$this->{'plugoutdb'}->_delete_mo($queue_msg->{'internal_id'});#delete if ok 
-			}
+	foreach my $somekey ( keys %$messages ) {
+		my $queue_msg = $messages->{$somekey};
+		my $delivered = $this->_process_out_message($queue_msg);
+		if ( defined($delivered) ) {
+			$this->{'plugoutdb'}->_delete_mo( $queue_msg->{'internal_id'} );    #delete if ok
+		}
 	}
-} 
+}
 
 sub _edr_init {
 	my $this = shift;
@@ -251,7 +249,6 @@ sub _edr_write {
 
 }
 
-
 sub start {
 
 	my ($this) = @_;
@@ -277,7 +274,7 @@ sub start {
 		$LOCAL_SYSTEM_ID = $this->conf->{'smpp'}->{'local_system_id'};
 	}
 
-	alarm 1; 
+	alarm 1;
 } ## end sub start
 
 sub _auth_esme {
@@ -485,7 +482,7 @@ sub _increase_already_connected {
 
 	}
 	$ESME->{$system_id}->{'already_connected'} = $ESME->{$system_id}->{'already_connected'} + 1;
-	
+
 	$this->shm->lock(LOCK_EX);
 	my $list = decode_json( $this->shm->fetch );
 
@@ -554,7 +551,7 @@ sub _connect_db {
 
 	# If DBMS isn' t accessible - try reconnect
 	if ( !$this->authdbh or !$this->authdbh->ping ) {
-		$this->authdbh( DBI->connect_cached( $dsn, $user, $passwd, { RaiseError => 1 }  ) );
+		$this->authdbh( DBI->connect_cached( $dsn, $user, $passwd, { RaiseError => 1 } ) );
 	}
 
 	if ( !$this->authdbh ) {
@@ -562,16 +559,16 @@ sub _connect_db {
 		$this->log( "error", "Cant connect to DBMS!" );
 		return undef;
 	}
-	
-	$this->log("warning","DB Connected!"); 
+
+	$this->log( "warning", "DB Connected!" );
 	return 1;
 
 } ## end sub _connect_db
 
-sub _disconnect_db { 
-	my $this = shift; 
-	$this->authdbh->disconnect; 	
-	$this->authdbh ( undef );  
+sub _disconnect_db {
+	my $this = shift;
+	$this->authdbh->disconnect;
+	$this->authdbh(undef);
 }
 
 =itemB<_authorize_submit> 
@@ -1390,7 +1387,7 @@ sub _process_out_message {
 	my ( $this, $mo ) = @_;
 
 	$this->log( "info", "got SM from OutQ:" . Dumper($mo) ) if ( $this->{debug} );
-	$this->log( "info", "got MO/DLR from OutQ for ESME_ID: ". $mo->{'esme_id'} ); 
+	$this->log( "info", "got MO/DLR from OutQ for ESME_ID: " . $mo->{'esme_id'} );
 
 	# Check if exist in MO esme_id
 	unless ( defined( $mo->{'esme_id'} ) ) {
@@ -1430,18 +1427,18 @@ sub _process_out_message {
 
 		if ( $esme_connect_found <= 0 ) {
 			$this->log( "warning", "ESME " . $mo->{'system_id'} . "not found in active list. " );
-			return undef; 
+			return undef;
 		} else {
-			my $hdl_index = rand($esme_connect_found);          # Select random connect
+			my $hdl_index = rand($esme_connect_found);    # Select random connect
 			my $hdl       = $esme_connects[$hdl_index];
-			$this->log("info","Sending SM to '".$hdl->{system_id}."'");
-			my $dlvrd     = $this->_deliver_sm( $hdl, $mo );    # send deliver_sm to ESME
-			return $dlvrd; 
+			$this->log( "info", "Sending SM to '" . $hdl->{system_id} . "'" );
+			my $dlvrd = $this->_deliver_sm( $hdl, $mo );    # send deliver_sm to ESME
+			return $dlvrd;
 		}
 
 	} ## end else
 
-} ## end sub _process_out_queue
+} ## end sub _process_out_message
 
 sub _deliver_sm {
 
@@ -1471,11 +1468,11 @@ sub _deliver_sm {
 		$this->log( "info", "MO Dump: " . Dumper($mo) );
 
 		# Send deliver_sm
-		if (    ( $esm_class == 4 )   
+		if (    ( $esm_class == 4 )
 			and ( defined( $mo->{message_state} ) )
 			and ( defined( $mo->{receipted_message_id} ) ) )
-		{    
-		  # DLR
+		{
+			# DLR
 			$hdl->{smpp}->deliver_sm(
 				source_addr_ton      => $source_addr_ton,             # International (MSISDN)
 				source_addr_npi      => $source_addr_npi,             # E.164
@@ -1491,7 +1488,7 @@ sub _deliver_sm {
 				receipted_message_id => $mo->{receipted_message_id}
 			);
 		} else {
-      # MO 
+			# MO
 			$hdl->{smpp}->deliver_sm(
 				source_addr_ton  => $source_addr_ton,                 # International (MSISDN)
 				source_addr_npi  => $source_addr_npi,                 # E.164
@@ -1543,14 +1540,37 @@ sub _process_socket {
 
 	# Try to read PDU
 	my $pdu = $hdl->{smpp}->read_pdu();
+	unless ( defined($pdu) ) {
+		# Disconnect if error while reading the PDU
+		$this->speak("[$$] Error while reading the PDU from $peer_addr : $peer_port");
+		$this->log( "warning", "Error while reading the PDU from $peer_addr : $peer_port" );
+		if ( $hdl->{system_id} ) {
+			$this->_decrease_already_connected( $hdl->{system_id} );
+		}
+		# Remove socket from select()
+		$this->selector->remove( $hdl->{smpp} );
+		# Close socket and remove record
+		$hdl->{smpp}->close();
+		delete $this->{handlers}->{ $hdl->{id} };
+		
+		my $login = $hdl->{system_id};
+		$this->shm->lock(LOCK_EX);
+		my $list = decode_json( $this->shm->fetch );
+		delete $list->{ $hdl->{id} };
+		$this->shm->store( encode_json($list) );
+		$this->shm->unlock;
+		
+		$this->speak("[$$] Socket for $peer_addr : $peer_port closed.");
+		$this->log("info","Socket for $peer_addr : $peer_port closed.");
 
+	} ## end unless ( defined($pdu) )
 	if ( !$pdu ) {
 
 		# Disconnect if EOF
 		if ( $hdl->{smpp}->eof() ) {
 
-			$this->speak("[$$] EOF from ${peer_addr}:${peer_port}");
-			$this->log( "warning", "EOF from ${peer_addr}:${peer_port}" );
+			$this->speak("[$$] EOF from $peer_addr : $peer_port ");
+			$this->log( "warning", "EOF from $peer_addr : $peer_port" );
 
 			if ( $hdl->{system_id} ) {
 				$this->_decrease_already_connected( $hdl->{system_id} );
@@ -1570,8 +1590,10 @@ sub _process_socket {
 			$this->shm->store( encode_json($list) );
 			$this->shm->unlock;
 
-		} else {
+			$this->speak("[$$] Socket for $peer_addr : $peer_port closed.");
+			$this->log("info","Socket for $peer_addr : $peer_port closed.");
 
+		} else {
 			$this->speak("[$$] Incoming event arrived but no SMPP PDU!");
 			$this->log( "warning", "Incoming event arrived from [${peer_addr}:${peer_port}] but no SMPP PDU!" );
 		}
@@ -1625,9 +1647,9 @@ sub cmd_unknown {
 
 	my ( $this, $pdu, $hdl ) = @_;
 
-	$this->speak(" [$$] Unknown PDU arrived from " . $hdl->{id} );
+	$this->speak( " [$$] Unknown PDU arrived from " . $hdl->{id} );
 	$this->log( "warning", "Unknown PDU received, sending generic_nack" );
-	$this->log( "warning", Dumper ($pdu) ); 
+	$this->log( "warning", Dumper($pdu) );
 
 	my $resp = $hdl->{smpp}->generic_nack(
 		seq    => $pdu->{seq},
@@ -1642,12 +1664,12 @@ When got generic_nack PDU ignore it, but log event about it.
 
 =cut 
 
-sub cmd_generic_nack { 
+sub cmd_generic_nack {
 
-	my ( $this, $pdu, $hdl ) = @_; 
+	my ( $this, $pdu, $hdl ) = @_;
 
-	$this->speak( "[$$] Generic NACK arrived from " . $hdl->{id} ); 
-	$this->log ("warning","Generic NACK arrived from " . $hdl->{id} . " Ignoring it."); 
+	$this->speak( "[$$] Generic NACK arrived from " . $hdl->{id} );
+	$this->log( "warning", "Generic NACK arrived from " . $hdl->{id} . " Ignoring it." );
 
 }
 
