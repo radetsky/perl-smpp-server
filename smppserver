@@ -1563,6 +1563,7 @@ sub _process_socket {
 		$this->speak("[$$] Socket for $peer_addr : $peer_port closed.");
 		$this->log("info","Socket for $peer_addr : $peer_port closed.");
 
+    return undef; 
 	} ## end unless ( defined($pdu) )
 	if ( !$pdu ) {
 
