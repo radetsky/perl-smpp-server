@@ -243,6 +243,12 @@ sub _connect_db {
 			sleep(30);
 			next;
 		}
+
+    if ( defined ( $this->{conf}->{'out_queue'}->{'mysql-set-names'} ) ) {
+			    my $q = 'set names ' . $this->{conf}->{'in_queue'}->{'mysql-set-names'};
+					$this->msgdbh->do ($q);
+		}
+		
 		last;
 	}
 

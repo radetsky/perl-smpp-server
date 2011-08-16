@@ -250,6 +250,11 @@ sub _connect_db {
 		$this->{'msgdbh'} = DBI->connect_cached( $dsn, $user, $passwd, { RaiseError => 1 } );
 	}
 
+  if ( defined ( $this->{conf}->{'in_queue'}->{'mysql-set-names'} ) ) { 
+	  my $q = 'set names ' . $this->{conf}->{'in_queue'}->{'mysql-set-names'}; 
+		$this->{'msgdbh'}->do ($q); 
+  }
+	
 	my $sql = "insert into " . $table . " ( msg_type, esme_id, src_addr, dst_addr, body, coding, udh, mwi, mclass, message_id, validity, deferred, registered_delivery, service_type, extra, received ) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,? ) ";
 	$this->{'msgsth'} = $this->{'msgdbh'}->prepare_cached($sql);
 	return 1;
