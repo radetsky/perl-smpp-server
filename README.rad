@@ -274,6 +274,11 @@ Sense in use "set names utf8" for example immediately after connect to database.
 TurboSMS custom option, but may be usable in future. 
 
 
+09 Sep 2011
+------------
+
+Removed perl-NetSDS clone from working directory.
+Need to review code and create new .spec file for correct RPM packaging
 
 
 
