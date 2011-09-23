@@ -5,24 +5,23 @@
 #
 #        USAGE:  ./smppd.pl
 #
-#  DESCRIPTION:  NetSDS SMPP Server
+#  DESCRIPTION:  NetSDS SMPP Server 2
 #
 #      OPTIONS:  ---
 # REQUIREMENTS:
 #         BUGS:  ---
 #        NOTES:  ---
 #       AUTHOR:  Michael Bochkaryov (Rattler), <misha@rattler.kiev.ua>
+#       AUTHOR:  Alex Radetsky (rad), <rad@rad.kiev.ua>
 #      COMPANY:  Net.Style
-#      VERSION:  1.0
+#      VERSION:  2.1
 #      CREATED:  12.07.2009 15:15:03 UTC
-#     REVISION:  ---
-#     MODIFIED:  Alex Radetsky (rad), <rad@rad.kiev.ua>
+#     MODIFIED:  21.09.2011   
 #===============================================================================
 
 use 5.8.0;
 use strict;
 use warnings;
-#use diagnostics qw(-verbose -warntrace);
 
 SMPPServerV2->run(
 	daemon      => undef,
@@ -41,14 +40,14 @@ use 5.8.0;
 use strict;
 use warnings;
 
-use base qw(NetSDS::App::SMPPServer);
+use base qw(NetSDS::App::SMPP);
 
 use NetSDS::Util::Convert;
 use NetSDS::Util::SMPPConvert;
 use NetSDS::Util::DateTime;
 use NetSDS::Util::String;
 use NetSDS::Util::Misc;
-use NetSDS::Queue;
+#use NetSDS::Queue;
 use NetSDS::App::SMSTradeOutDB;
 use NetSDS::App::SMSTradeInDB;
 use IPC::ShareLite qw ( :lock );
@@ -97,7 +96,8 @@ sub initialize {
 	my ( $this, %params ) = @_;
 
 	$this->speak("[$$] SMPPServerV2 Initializing application.");
-	# Determine application name from process name
+
+  # Determine application name from process name
 	if ( !$this->{name} ) {
 		$this->_determine_name();
 	}
@@ -136,9 +136,19 @@ sub initialize {
 		$this->log( "info", "Logger started" );
 	}
 
+  # Get PID filename
+	my $pidfilename = undef; 
+
+	unless ( defined ( $this->{conf}->{'pidfilename'} ) ) { 
+		$pidfilename = $this->{name}; 
+	} else { 
+		$pidfilename = $this->{conf}->{'pidfilename'}; 
+	} 
+
 	# Process PID file if necessary
+	
 	if ( $this->use_pidfile ) {
-		if ( Proc::PID::File->running( dir => $this->pid_dir, name => $this->{name} ) ) {
+		if ( Proc::PID::File->running( dir => $this->pid_dir, name => $pidfilename ) ) {
 			$this->log( "error", "Application already running, stop immediately!" );
 			die "Application already running, stop immediately!";
 		}
@@ -147,16 +157,38 @@ sub initialize {
 	# Update PID if necessary
 	$this->{pid} = $$;
 
-	# Выкинули нафиг где обработчики сигналов, потому что детей у этого процесса больше не будет.
-	# Оставляем только ALRM для генерации прерываний по проверке наличия исходящих сообщений.
+  # Working with ALARM signal because we want to process MO and DLR every second.
 
 	$SIG{ALRM} = sub {
 		$this->_process_mo_dlr();
 		alarm 1;
 	};
-	# Initialize SHM area
-	$this->_init_shm();
 
+	 $SIG{USR1} = sub {
+   		$this->speak("SIGUSR1 caught");
+   		$this->log( "info", "SIGUSR1 caught" );
+   		$this->_kick();      # Seek and destrou
+   		$this->_reload();    # Reload users configuration
+	};
+	$SIG{TERM} = sub { 
+			$this->_remove_shm();
+	}; 
+	$SIG{INT} = sub { 
+			$this->_remove_shm();
+	}; 
+
+	# Initialize SHM area
+	my $shm_key = $this->_init_shm();
+
+  # Save SHM key
+  $this->{conf}->{'shm'}->{'segment'} = $shm_key; 
+
+  # Write SHM key to file 
+  $this->_save_shm_key($shm_key); 
+
+  # TODO 
+	# Save different PID and SHM files. 
+	# PID -> auto 
 	# Initialize Event Data Recording subsystem
 	$this->_edr_init();
 
@@ -1688,6 +1720,7 @@ sub _kick {
 
 sub _reload {
 	my $this = shift;
+  $this->log("warning","Got USR1. Reloading."); 
 
 }
 
@@ -1700,6 +1733,83 @@ sub _shutup {
 			my $seq = $hdl->{smpp}->unbind();
 		}
 	}
+}
+
+sub _init_shm {
+  my ($this) = @_;
+
+  my $shm_key = 1965;	
+  my $shm = undef;
+	my $try = 0; 
+
+	if ( defined ( $this->{conf}->{'shm'}->{'segment'} ) ) { 
+		$shm_key =  $this->{conf}->{'shm'}->{'segment'};
+	}
+
+	# Create SHM segment for data exchange
+  while ( !$shm ) { 
+	  eval { 
+	    $shm = IPC::ShareLite->new (
+		  		-key     => $shm_key,
+					-create  => 'yes',
+					-destroy => 'yes', 
+					-exclusive => 'yes',
+			); 
+		};  
+		if ( $@ ) { 
+
+		  # warn "try = $try; shm_key => $shm_key;"; 
+		  #$try++; 
+			if ($try > 10000) { 
+				last; 
+			}
+			if ( !$shm ) { 
+				$shm_key++;
+			}
+		}
+	}
+
+	if ( !$shm ) {
+		$this->log( "error", "Cant create shared memory segment" );
+		$this->speak("Cant create shared memory segment");
+		die $!;
+	}
+
+	# Initialize shared memory clients list
+	# Structure: hash reference with system_id => 1
+	$shm->store( encode_json( {} ) );
+	$this->shm($shm);
+  return $shm_key; 
+
+} ## end sub _init_shm
+
+=item B<_save_shm_key>
+
+Saves current shared memory segment to file named in config -> shm -> file. 
+
+=cut 
+
+sub _save_shm_key { 
+	my $this = shift; 
+	my $shm_key = shift;  
+
+  my $filename = undef; 
+
+  unless ( defined ( $this->{conf}->{'shm'}->{'file'} ) ) { 
+		$filename = '/var/run/NetSDS/smppserver.shm';
+	} else { 
+		$filename = $this->{conf}->{'shm'}->{'file'}; 
+	}
+
+  if ( -e $filename ) {  
+		# file exists 
+    $this->log( "warning", "SHM file exists."); 
+  }
+  open (SHMFILE, ">$filename") 
+		or die $! ; 
+	print SHMFILE $shm_key . "\n"; 
+	close SHMFILE; 
+
 }
 
 sub main_loop {
@@ -1752,6 +1862,16 @@ sub main_loop {
 	$this->stop();
 
 } ## end sub main_loop
+
+sub _remove_shm { 
+
+	my $this = shift; 
+
+	$this->shm(undef); 
+  $this->{to_finalize} = 1; 
+
+  return 1; 
+} 
 
 1;
 #===============================================================================
