@@ -909,6 +909,7 @@ sub cmd_submit_sm {
 		# Check if need DLR for message
 		if ( $pdu->{registered_delivery} ) {
 			$queue_msg->{register_delivery} = '1';
+			$this->{'plugindb'}->_put_dl_request($message_id); 
 		}
 
 		# Determine TTL for the message
@@ -1418,7 +1419,10 @@ sub cmd_bind_receiver {
 sub _process_out_message {
 	my ( $this, $mo ) = @_;
 
-	$this->log( "info", "got SM from OutQ:" . Dumper($mo) ) if ( $this->{debug} );
+	if ( $this->{debug} ) { 
+			$this->log( "info", "got SM from OutQ:" . Dumper($mo) ); 
+	}
+	
 	$this->log( "info", "got MO/DLR from OutQ for ESME_ID: " . $mo->{'esme_id'} );
 
 	# Check if exist in MO esme_id
@@ -1488,6 +1492,17 @@ sub _deliver_sm {
 		my $dest_addr_npi    = 0x01;
 		my $destination_addr = $mo->{dst_addr};
 		my $msg_text         = $mo->{text};
+
+		# Check registered_delivery if DLR 
+		
+		if ( defined ( $this->{conf}->{'in_queue'}->{'check_delivery_requests'} ) ) { 
+			if ( ( $esm_class == 4 ) and ( defined  ( $mo->{receipted_message_id} ) ) ) {
+				unless ( defined ( $this->{'plugindb'}->_get_dl_request ( $mo->{receipted_message_id} ) ) ) { 
+					$this->log('warning','Delete DLR with message.id='.$message_id.' because registered_delivery was not found. ');  
+					$this->{'plugoutdb'}->_delete_mo($message_id); 
+				}	
+			}
+		}
 
 		# Set right data_coding field.
 		my $data_coding = $mo->{coding};
@@ -1639,7 +1654,7 @@ sub _process_socket {
 			$pdu_cmd = cmd_tab->{ $pdu->{cmd} };
 		}
 
-		# $this->log("info", "PDU arrived: $pdu_cmd");
+		$this->log("info", "PDU arrived: " . Dumper ( $pdu ) );
 
 		# Determine method name to dispatch PDU call
 		my $method_name = "cmd_" . $pdu_cmd;
