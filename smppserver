@@ -28,7 +28,7 @@ SMPPServerV2->run(
 	verbose     => 1,
 	use_pidfile => 1,
 	has_conf    => 1,
-	debug       => 1,
+	debug       => undef,
 	conf_file   => "./smppserver.conf",
 );
 
@@ -95,7 +95,7 @@ sub initialize {
 
 	my ( $this, %params ) = @_;
 
-	$this->speak("[$$] SMPPServerV2 Initializing application.");
+	$this->speak("[$$] NetSDS SMPPServer v2.1 initializing application.");
 
   # Determine application name from process name
 	if ( !$this->{name} ) {
@@ -104,6 +104,14 @@ sub initialize {
 
 	# Get CLI parameters
 	$this->_get_cli_param();
+
+	if ( $this->{debug} ) { 
+		$this->speak ("[$$] Debug enabled. ");
+	}
+
+  if ( $this->{debug} ) { 
+		$this->speak ("[$$] Reading configuration. ");
+	} 
 
 	# Initialize configuration
 	if ( $this->{has_conf} ) {
@@ -123,6 +131,7 @@ sub initialize {
 		}
 	}
 
+
 	# Daemonize, if needed
 	if ( $this->daemon() ) {
 		$this->speak("[$$] Daemonize, switch verbosity to false.");
@@ -133,17 +142,24 @@ sub initialize {
 	# Create syslog handler
 	if ( !$this->logger ) {
 		$this->logger( NetSDS::Logger->new( name => $this->{name} ) );
-		$this->log( "info", "Logger started" );
+		$this->log( "info", "NetSDS SMPPServer v.2.1 logger started" );
 	}
 
   # Get PID filename
-	my $pidfilename = undef; 
+	if ( $this->{debug} ) { 
+		$this->log( "info", "Working with PID file.");
+	} 
 
+	my $pidfilename = undef; 
 	unless ( defined ( $this->{conf}->{'pidfilename'} ) ) { 
 		$pidfilename = $this->{name}; 
 	} else { 
 		$pidfilename = $this->{conf}->{'pidfilename'}; 
 	} 
+
+	if ( $this->{debug} ) {
+		$this->log ( "info", "pidfilename = $pidfilename" ); 
+	}
 
 	# Process PID file if necessary
 	
@@ -159,17 +175,29 @@ sub initialize {
 
   # Working with ALARM signal because we want to process MO and DLR every second.
 
+	if ( $this->{debug} ) { 
+		$this->log("info", "Setting ALRM signal handler");
+	}		
+
 	$SIG{ALRM} = sub {
 		$this->_process_mo_dlr();
 		alarm 1;
 	};
 
+	if ( $this->{debug} ) { 
+		$this->log("info","Setting USR1 signal handler");
+  }
 	 $SIG{USR1} = sub {
    		$this->speak("SIGUSR1 caught");
    		$this->log( "info", "SIGUSR1 caught" );
    		$this->_kick();      # Seek and destrou
    		$this->_reload();    # Reload users configuration
 	};
+
+	if ( $this->{debug} ) { 
+		$this->log("info","Setting TERM and INT signal handlers.");
+  }
+
 	$SIG{TERM} = sub { 
 			$this->_remove_shm();
 	}; 
@@ -177,35 +205,64 @@ sub initialize {
 			$this->_remove_shm();
 	}; 
 
+	if ( $this->{debug} ) { 
+		$this->log("info", "Initialize shared memory.");
+  }
+
 	# Initialize SHM area
 	my $shm_key = $this->_init_shm();
+
+	if ( $this->{debug} ) { 
+		$this->log("info", "Save got segment number $shm_key to file.");
+  }
 
   # Save SHM key
   $this->{conf}->{'shm'}->{'segment'} = $shm_key; 
 
   # Write SHM key to file 
   $this->_save_shm_key($shm_key); 
+	
+	if ( $this->{debug} ) { 
+		$this->log("info", "Initialize EDR subsystem");
+  }
 
-  # TODO 
-	# Save different PID and SHM files. 
-	# PID -> auto 
 	# Initialize Event Data Recording subsystem
 	$this->_edr_init();
 
+	if ( $this->{debug} ) { 
+		$this->log("info", "Create select() handler");
+  }
+
 	# Create select() handler for incoming events
 	$this->selector( IO::Select->new() );
+
+	if ( $this->{debug} ) { 
+		$this->log("info", "Initialize input queue plugin");
+  }
 
 	# Initialize queue for incoming (MT) events
 	my $plugindb = NetSDS::App::SMSTradeInDB->new( $this->{conf} );
 	$this->{'plugindb'} = $plugindb;
 
+	if ( $this->{debug} ) { 
+		$this->log("info","Initialize output queue plugin");
+  }
+
 	# Initialize MO/DLR selector
 	my $plugoutdb = NetSDS::App::SMSTradeOutDB->new( $this->shm, $this->{conf} );
 	$this->{'plugoutdb'} = $plugoutdb;
 
+	if ( $this->{debug} ) { 
+		$this->log("info","Initialize listener");
+  }
+
 	# Initialize listening socket and add to select()
 	$this->_init_listener();
 	$this->selector->add( $this->listener );
+
+	if ( $this->{debug} ) { 
+		$this->log("info","Setting initial array of handlers");
+  }
 
 	# Set initial empty array of handlers hashref
 	$this->handlers( {} );
@@ -1830,12 +1887,19 @@ sub _save_shm_key {
 sub main_loop {
 
 	my ( $this, %params ) = @_;
-
+  my $t1 = time(); 
+  my $t2 = time(); 
 	# Run user defined hooks on startup
 	$this->start();
 
 	# Run main process loop
 	while ( !$this->{to_finalize} ) {
+		# Clean DLR repo 
+		$t2 = time();
+		if ( ( $t2 - $t1 ) > 60 ) { 
+				$this->{'plugindb'}->_dl_expire();
+				$t1 = time();
+		}
 
 		# Wait for incoming events on all sockets
 		my ( $sel_r, $sel_w, $sel_x ) = IO::Select->select( $this->selector, undef, undef, 0.0005 );

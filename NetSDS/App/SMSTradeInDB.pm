@@ -92,6 +92,23 @@ sub new {
 #__PACKAGE__->mk_accessors(qw/msgsth/);
 
 
+sub _dl_expire { 
+	my $this = shift; 
+
+	$this->log('info','Expire registered_delivery queue'); 
+
+	eval { 
+		$this->{'dlrdrop'}->execute();
+	}; 
+	if ( $@ ) { 
+		$this->_connect_db();
+		return undef; 
+	}
+	return 1; 
+
+}
+
+
 =item B<_get_dl_request>
 
   Search in delivery_requests for message_id
@@ -327,8 +344,10 @@ sub _connect_db {
 			$sql = "select * from " . $dlr_table . " where message_id=? "; 
 			$this->{'dlrget'} = $this->{'msgdbh'}->prepare_cached($sql); 
 
-	}
+			$sql = "delete from " . $dlr_table . " where expire < now() - interval 1 day "; 
+			$this->{'dlrdrop'} = $this->{'msgdbh'}->prepare_cached($sql); 
 
+  }
 
   return 1;
 
