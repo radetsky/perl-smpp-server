@@ -81,6 +81,32 @@ sub process {
             }
         }
     }
+		
+    if ( defined( $this->{'debug'} ) ) {
+        printf( "Debug system-id: %s\n", $this->{'debug'} );
+
+        foreach my $connect_id ( keys %$list ) {
+            if ( $list->{$connect_id}->{'login'} eq $this->{'debug'} ) {
+                $list->{$connect_id}->{'debug'} = 1;
+                $this->shm->lock;
+                $this->shm->store( encode_json($list) );
+                $this->shm->unlock;
+            }
+        }
+    }
+	
+    if ( defined( $this->{'nodebug'} ) ) {
+        printf( "Disable debug system-id: %s\n", $this->{'nodebug'} );
+
+        foreach my $connect_id ( keys %$list ) {
+            if ( $list->{$connect_id}->{'login'} eq $this->{'nodebug'} ) {
+                $list->{$connect_id}->{'debug'} = 0;
+                $this->shm->lock;
+                $this->shm->store( encode_json($list) );
+                $this->shm->unlock;
+            }
+        }
+    }
 
 
     if (   ( defined( $this->{'kick'} ) )
@@ -121,12 +147,14 @@ sub _get_cli_param {
     my $kick   = undef;
     my $reload = undef;
     my $help   = undef; 
+		my $nodebug = undef; 
 
 
     # Get command line arguments
     GetOptions(
         'conf=s'  => \$conf,
-        'debug!'  => \$debug,
+				'debug=s'  => \$debug,
+				'nodebug=s' => \$nodebug,
         'kick=s'  => \$kick,
         'reload!' => \$reload,
 				'help!'   => \$help, 
@@ -143,8 +171,12 @@ sub _get_cli_param {
 
     # Set debug mode
     if ( defined $debug ) {
-        $this->{debug} = $debug;
+        $this->{'debug'} = $debug;
     }
+
+		if ( defined $nodebug ) { 
+				$this->{'nodebug'} = $nodebug; 
+		}
 
     # Set application name
     if ( defined $kick ) {
@@ -181,9 +213,9 @@ sub _read_shm_key {
 sub _usage { 
 		my $this = shift; 
 
-		print "Usage: $this->{name} [ --reload | --debug | --kick ESME_ID | --conf CONFIG ]\n"; 
+		print "Usage: $this->{name} [ --reload | --[no]debug ESME_ID | --kick ESME_ID | --conf CONFIG ]\n"; 
 		print " --reload : Send USR1 to smppserver. SMPPD2 will refresh user parameters. \n"; 
-		print " --debug  : Reserved \n"; 
+		print " --debug  : Enable debug for ESME_ID \n"; 
 		print " --conf   : Use alternative configuration file. Default ./smppserver.conf \n"; 
 		print " --kick   : Send signal to SMPPD2 to disconnect ESME_ID. \n"; 
 
