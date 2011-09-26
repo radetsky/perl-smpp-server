@@ -54,7 +54,6 @@ our @EXPORT_OK = qw();
 #===============================================================================
 #
 
-=head1 CLASS METHODS
 
 =over
 
@@ -92,6 +91,84 @@ sub new {
 #__PACKAGE__->mk_accessors(qw/msgdbh/);
 #__PACKAGE__->mk_accessors(qw/msgsth/);
 
+
+sub _dl_expire { 
+	my $this = shift; 
+
+	$this->log('info','Expire registered_delivery queue'); 
+
+	eval { 
+		$this->{'dlrdrop'}->execute();
+	}; 
+	if ( $@ ) { 
+		$this->_connect_db();
+		return undef; 
+	}
+	return 1; 
+
+}
+
+
+=item B<_get_dl_request>
+
+  Search in delivery_requests for message_id
+	return 1 if exists 
+	undef if false 
+
+=cut 
+
+sub _get_dl_request { 
+		my $this = shift; 
+		my $message_id = shift; 
+		my $result = undef; 
+
+		eval { 
+			$this->{'dlrget'}->execute($message_id); 
+			$result = $this->{'dlrget'}->fetchrow_hashref; 
+		};
+
+		if ($@) { 
+			$this->_connect_db();
+			return undef; 
+		}
+		
+		unless ( defined ( $result ) ) { 
+			# no more records in the database. 
+			# no records for message_id 
+			return undef; 
+		} 
+
+		# something was fetched. returning true.
+		return 1; 
+
+}
+=item B<_put_dl_request> 
+
+ Inserts message_id into delivery_requests table
+
+=cut 
+
+sub _put_dl_request { 
+
+    my $this = shift; 
+		my $message_id = shift; 
+
+		unless ( defined ( $this->{conf}->{'in_queue'}->{'check_delivery_requests'} ) ) {  
+			return undef; 
+		} 
+
+	  my $rv; 
+
+		eval { 
+				$rv = $this->{'dlrsth'}->execute($message_id); 
+		};
+
+		if ( $@ ) { 
+			$this->_connect_db();
+			return undef 
+		} 
+		return 1; 
+}
 =item B<_put_mt> 
 
  Inserts into messages table MT message 
@@ -257,7 +334,22 @@ sub _connect_db {
 	
 	my $sql = "insert into " . $table . " ( msg_type, esme_id, src_addr, dst_addr, body, coding, udh, mwi, mclass, message_id, validity, deferred, registered_delivery, service_type, extra, received ) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,? ) ";
 	$this->{'msgsth'} = $this->{'msgdbh'}->prepare_cached($sql);
-	return 1;
+
+  if ( defined ( $this->{conf}->{'in_queue'}->{'check_delivery_requests'} ) ) { 
+			my $dlr_table = $this->{conf}->{'in_queue'}->{'check_delivery_requests'};
+
+			$sql = "insert into " . $dlr_table . " ( message_id, expire ) values (?, now() + interval 1 day ) "; 
+			$this->{'dlrsth'} = $this->{'msgdbh'}->prepare_cached($sql); 
+		
+			$sql = "select * from " . $dlr_table . " where message_id=? "; 
+			$this->{'dlrget'} = $this->{'msgdbh'}->prepare_cached($sql); 
+
+			$sql = "delete from " . $dlr_table . " where expire < now() - interval 1 day "; 
+			$this->{'dlrdrop'} = $this->{'msgdbh'}->prepare_cached($sql); 
+
+  }
+
+  return 1;
 
 } ## end sub _connect_db
 

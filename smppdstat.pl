@@ -3,7 +3,7 @@
 #
 #         FILE:  smppdstat.pl
 #
-#        USAGE:  ./smppdstat.pl
+#        USAGE:  ./smppdstat.pl [ --conf someother.conf ]
 #
 #  DESCRIPTION:  NetSDS SMPP Server V2 stat tool
 #
@@ -13,9 +13,10 @@
 #        NOTES:  ---
 #       AUTHOR:  Alex Radetsky <rad@rad.kiev.ua>
 #      COMPANY:  Net.Style
-#      VERSION:  1.0
-#      CREATED:  Septemper 2010 
-#     REVISION:  003
+#      VERSION:  2.1
+#      CREATED:  September 2010 
+#     REVISION:  001
+#     MODIFIED:  September 2011
 #===============================================================================
 
 use 5.8.0;
@@ -27,6 +28,7 @@ SMPPdSTAT->run(
 	verbose   => 1,
 	has_conf  => 1,
 	conf_file => "./smppserver.conf",
+  infinite  => undef, 
 );
 
 1;
@@ -45,24 +47,26 @@ use Data::Dumper;
 
 use NetSDS::Util::DateTime;
 
-sub run {
+sub process {
 
 	my $this = shift;
 
+  my $shm_key = $this->_read_shm_key(); 
+
 	my $share = new IPC::ShareLite(
-		-key     => 1987,
+		-key     => $shm_key,
 		-create  => 'no',
 		-destroy => 'no'
 	  )
-	  or die("Can't access to shared memory with segment 1987: $!\n");
+	  or die("Can't access to shared memory with segment $shm_key: $!\n");
 
 	my $list          = decode_json( $share->fetch );
 
-	#my $my_local_data = defined( $this->conf->{'shm'}->{'magickey'} ) ? $this->conf->{'shm'}->{'magickey'} : 'My L0c4l D4t4';
-    my $my_local_data = 'My L0c4l D4t4';
+	my $my_local_data = defined( $this->conf->{'shm'}->{'magickey'} ) ? $this->conf->{'shm'}->{'magickey'} : 'My L0c4l D4t4';
 
 	# Show start and uptime
-	my $start_time             = $list->{$my_local_data}->{'start_timestamp'};
+
+  my $start_time             = $list->{$my_local_data}->{'start_timestamp'};
 	my $str_start_time = localtime($start_time);
 
 	my $timediff               = time() - $start_time;
@@ -88,6 +92,27 @@ sub run {
 	}
 
 } ## end sub run
+
+=item B<_read_shm_key> 
+
+ Read SHM key from /var/run/NetSDS/somefile.shm
+
+=cut 
+
+sub _read_shm_key { 
+		my $this = shift; 
+
+		my $filename = '/var/run/NetSDS/smppserver.shm'; 
+	  if ( defined ( $this->{conf}->{'shm'}->{'file'} ) ) { 
+			$filename = $this->{conf}->{'shm'}->{'file'}; 
+		} 
+	  open (MYSHM, $filename) or die $!; 
+		my $key = <MYSHM>;
+		chomp $key; 
+		$key = $key + 0; 
+		close MYSHM; 
+		return $key; 
+}
 
 sub _uptime {
 	my ( $this, $timediff ) = @_;

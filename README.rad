@@ -9,25 +9,29 @@ You must install by usual way next Perl modules.
 Usual way - is perl Makefile.PL; make; make install; 
 Or install package via repository instrument. 
 
+
 IPC::ShareLite 
 Data::Structure::Util 
 Unix::Syslog
 Data::UUID
 Cache::Memcached::Fast
 DBI
-DBD::Pg
-DBD::MySQL
-
+DBD::Pg 
+DBD::MySQL 
+Net::SMPP
+NetSDS* 
 
 DATABASE PREPARING
 ------------------
 
 $ mysql -u root -p 
-> create database mydb; 
+> create database mydb;
+> use mydb; 
 > source mydb.sql
+> source edr.sql 
+> source dlr.dlr 
 
 Grant all privileges on new database to some user. 
-
 
 
 CONFIGURATION FILES
@@ -51,9 +55,6 @@ RUN
 
 $./smppserver 
 Must work. Read the /var/log/messages. 
-
-$ ps ax | grep smpp 
-Must show 3 processes; 
 
 For DEBUG porposes default mode is not daemon. It will more messages to console. 
 If you want to daemonize smppserver run it with --daemon option : 
@@ -279,6 +280,30 @@ TurboSMS custom option, but may be usable in future.
 
 Removed perl-NetSDS clone from working directory.
 Need to review code and create new .spec file for correct RPM packaging
+
+
+20-23 Sep 2011
+---------------
+
++ Changed SHM create logic. Searching for next free segment. 
+Initial value for shm key is in the config. Default value is 1999. 
++ Writing SHM key to the config -> shm -> file 
++ update smppdstat.pl + smppdc.pl 
+
+So, from now we can run many smppserver with different configuration files 
+at the one host server. 
+
+Example: 
+./smppserver --conf ./smppserver.conf 
+./smppserver --conf ./smppserver2.conf --daemon  
+./smppserver --conf ./smppserver3.conf --nodaemon 
+
++ Added more correct logic to smppdstat.pl + smppdc.pl 
+
++ Added DLR check. 
+* check pdu->registered_delivery. It it exists - put message_id into delivery_requests. 
+* when DLR arrives for message_id look in delivery_requests. If exists - deliver DLR to ESME, else just drop it. 
+* registered delivery requests will expire in 1 day (24 hours from now() ) 
 
 
 

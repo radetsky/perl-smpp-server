@@ -5,31 +5,30 @@
 #
 #        USAGE:  ./smppd.pl
 #
-#  DESCRIPTION:  NetSDS SMPP Server
+#  DESCRIPTION:  NetSDS SMPP Server 2
 #
 #      OPTIONS:  ---
 # REQUIREMENTS:
 #         BUGS:  ---
 #        NOTES:  ---
 #       AUTHOR:  Michael Bochkaryov (Rattler), <misha@rattler.kiev.ua>
+#       AUTHOR:  Alex Radetsky (rad), <rad@rad.kiev.ua>
 #      COMPANY:  Net.Style
-#      VERSION:  1.0
+#      VERSION:  2.1
 #      CREATED:  12.07.2009 15:15:03 UTC
-#     REVISION:  ---
-#     MODIFIED:  Alex Radetsky (rad), <rad@rad.kiev.ua>
+#     MODIFIED:  21.09.2011   
 #===============================================================================
 
 use 5.8.0;
 use strict;
 use warnings;
-#use diagnostics qw(-verbose -warntrace);
 
 SMPPServerV2->run(
 	daemon      => undef,
 	verbose     => 1,
 	use_pidfile => 1,
 	has_conf    => 1,
-	debug       => 1,
+	debug       => undef,
 	conf_file   => "./smppserver.conf",
 );
 
@@ -41,14 +40,14 @@ use 5.8.0;
 use strict;
 use warnings;
 
-use base qw(NetSDS::App::SMPPServer);
+use base qw(NetSDS::App::SMPP);
 
 use NetSDS::Util::Convert;
 use NetSDS::Util::SMPPConvert;
 use NetSDS::Util::DateTime;
 use NetSDS::Util::String;
 use NetSDS::Util::Misc;
-use NetSDS::Queue;
+#use NetSDS::Queue;
 use NetSDS::App::SMSTradeOutDB;
 use NetSDS::App::SMSTradeInDB;
 use IPC::ShareLite qw ( :lock );
@@ -96,14 +95,23 @@ sub initialize {
 
 	my ( $this, %params ) = @_;
 
-	$this->speak("[$$] SMPPServerV2 Initializing application.");
-	# Determine application name from process name
+	$this->speak("[$$] NetSDS SMPPServer v2.1 initializing application.");
+
+  # Determine application name from process name
 	if ( !$this->{name} ) {
 		$this->_determine_name();
 	}
 
 	# Get CLI parameters
 	$this->_get_cli_param();
+
+	if ( $this->{debug} ) { 
+		$this->speak ("[$$] Debug enabled. ");
+	}
+
+  if ( $this->{debug} ) { 
+		$this->speak ("[$$] Reading configuration. ");
+	} 
 
 	# Initialize configuration
 	if ( $this->{has_conf} ) {
@@ -123,6 +131,7 @@ sub initialize {
 		}
 	}
 
+
 	# Daemonize, if needed
 	if ( $this->daemon() ) {
 		$this->speak("[$$] Daemonize, switch verbosity to false.");
@@ -133,12 +142,29 @@ sub initialize {
 	# Create syslog handler
 	if ( !$this->logger ) {
 		$this->logger( NetSDS::Logger->new( name => $this->{name} ) );
-		$this->log( "info", "Logger started" );
+		$this->log( "info", "NetSDS SMPPServer v.2.1 logger started" );
+	}
+
+  # Get PID filename
+	if ( $this->{debug} ) { 
+		$this->log( "info", "Working with PID file.");
+	} 
+
+	my $pidfilename = undef; 
+	unless ( defined ( $this->{conf}->{'pidfilename'} ) ) { 
+		$pidfilename = $this->{name}; 
+	} else { 
+		$pidfilename = $this->{conf}->{'pidfilename'}; 
+	} 
+
+	if ( $this->{debug} ) {
+		$this->log ( "info", "pidfilename = $pidfilename" ); 
 	}
 
 	# Process PID file if necessary
+	
 	if ( $this->use_pidfile ) {
-		if ( Proc::PID::File->running( dir => $this->pid_dir, name => $this->{name} ) ) {
+		if ( Proc::PID::File->running( dir => $this->pid_dir, name => $pidfilename ) ) {
 			$this->log( "error", "Application already running, stop immediately!" );
 			die "Application already running, stop immediately!";
 		}
@@ -147,33 +173,96 @@ sub initialize {
 	# Update PID if necessary
 	$this->{pid} = $$;
 
-	# Выкинули нафиг где обработчики сигналов, потому что детей у этого процесса больше не будет.
-	# Оставляем только ALRM для генерации прерываний по проверке наличия исходящих сообщений.
+  # Working with ALARM signal because we want to process MO and DLR every second.
+
+	if ( $this->{debug} ) { 
+		$this->log("info", "Setting ALRM signal handler");
+	}		
 
 	$SIG{ALRM} = sub {
 		$this->_process_mo_dlr();
 		alarm 1;
 	};
+
+	if ( $this->{debug} ) { 
+		$this->log("info","Setting USR1 signal handler");
+  }
+	 $SIG{USR1} = sub {
+   		$this->speak("SIGUSR1 caught");
+   		$this->log( "info", "SIGUSR1 caught" );
+   		$this->_kick();      # Seek and destrou
+   		$this->_reload();    # Reload users configuration
+	};
+
+	if ( $this->{debug} ) { 
+		$this->log("info","Setting TERM and INT signal handlers.");
+  }
+
+	$SIG{TERM} = sub { 
+			$this->_remove_shm();
+	}; 
+	$SIG{INT} = sub { 
+			$this->_remove_shm();
+	}; 
+
+	if ( $this->{debug} ) { 
+		$this->log("info", "Initialize shared memory.");
+  }
+
 	# Initialize SHM area
-	$this->_init_shm();
+	my $shm_key = $this->_init_shm();
+
+	if ( $this->{debug} ) { 
+		$this->log("info", "Save got segment number $shm_key to file.");
+  }
+
+  # Save SHM key
+  $this->{conf}->{'shm'}->{'segment'} = $shm_key; 
+
+  # Write SHM key to file 
+  $this->_save_shm_key($shm_key); 
+	
+	if ( $this->{debug} ) { 
+		$this->log("info", "Initialize EDR subsystem");
+  }
 
 	# Initialize Event Data Recording subsystem
 	$this->_edr_init();
 
+	if ( $this->{debug} ) { 
+		$this->log("info", "Create select() handler");
+  }
+
 	# Create select() handler for incoming events
 	$this->selector( IO::Select->new() );
+
+	if ( $this->{debug} ) { 
+		$this->log("info", "Initialize input queue plugin");
+  }
 
 	# Initialize queue for incoming (MT) events
 	my $plugindb = NetSDS::App::SMSTradeInDB->new( $this->{conf} );
 	$this->{'plugindb'} = $plugindb;
 
+	if ( $this->{debug} ) { 
+		$this->log("info","Initialize output queue plugin");
+  }
+
 	# Initialize MO/DLR selector
 	my $plugoutdb = NetSDS::App::SMSTradeOutDB->new( $this->shm, $this->{conf} );
 	$this->{'plugoutdb'} = $plugoutdb;
 
+	if ( $this->{debug} ) { 
+		$this->log("info","Initialize listener");
+  }
+
 	# Initialize listening socket and add to select()
 	$this->_init_listener();
 	$this->selector->add( $this->listener );
+
+	if ( $this->{debug} ) { 
+		$this->log("info","Setting initial array of handlers");
+  }
 
 	# Set initial empty array of handlers hashref
 	$this->handlers( {} );
@@ -877,6 +966,7 @@ sub cmd_submit_sm {
 		# Check if need DLR for message
 		if ( $pdu->{registered_delivery} ) {
 			$queue_msg->{register_delivery} = '1';
+			$this->{'plugindb'}->_put_dl_request($message_id); 
 		}
 
 		# Determine TTL for the message
@@ -1386,7 +1476,10 @@ sub cmd_bind_receiver {
 sub _process_out_message {
 	my ( $this, $mo ) = @_;
 
-	$this->log( "info", "got SM from OutQ:" . Dumper($mo) ) if ( $this->{debug} );
+	if ( $this->{debug} ) { 
+			$this->log( "info", "got SM from OutQ:" . Dumper($mo) ); 
+	}
+	
 	$this->log( "info", "got MO/DLR from OutQ for ESME_ID: " . $mo->{'esme_id'} );
 
 	# Check if exist in MO esme_id
@@ -1456,6 +1549,17 @@ sub _deliver_sm {
 		my $dest_addr_npi    = 0x01;
 		my $destination_addr = $mo->{dst_addr};
 		my $msg_text         = $mo->{text};
+
+		# Check registered_delivery if DLR 
+		
+		if ( defined ( $this->{conf}->{'in_queue'}->{'check_delivery_requests'} ) ) { 
+			if ( ( $esm_class == 4 ) and ( defined  ( $mo->{receipted_message_id} ) ) ) {
+				unless ( defined ( $this->{'plugindb'}->_get_dl_request ( $mo->{receipted_message_id} ) ) ) { 
+					$this->log('warning','Delete DLR with message.id='.$message_id.' because registered_delivery was not found. ');  
+					$this->{'plugoutdb'}->_delete_mo($message_id); 
+				}	
+			}
+		}
 
 		# Set right data_coding field.
 		my $data_coding = $mo->{coding};
@@ -1607,7 +1711,7 @@ sub _process_socket {
 			$pdu_cmd = cmd_tab->{ $pdu->{cmd} };
 		}
 
-		# $this->log("info", "PDU arrived: $pdu_cmd");
+		$this->log("info", "PDU arrived: " . Dumper ( $pdu ) );
 
 		# Determine method name to dispatch PDU call
 		my $method_name = "cmd_" . $pdu_cmd;
@@ -1688,6 +1792,7 @@ sub _kick {
 
 sub _reload {
 	my $this = shift;
+  $this->log("warning","Got USR1. Reloading."); 
 
 }
 
@@ -1702,15 +1807,98 @@ sub _shutup {
 	}
 }
 
+sub _init_shm {
+  my ($this) = @_;
+
+  my $shm_key = 1965;	
+  my $shm = undef;
+	my $try = 0; 
+
+	if ( defined ( $this->{conf}->{'shm'}->{'segment'} ) ) { 
+		$shm_key =  $this->{conf}->{'shm'}->{'segment'};
+	}
+
+	# Create SHM segment for data exchange
+  while ( !$shm ) { 
+	  eval { 
+	    $shm = IPC::ShareLite->new (
+		  		-key     => $shm_key,
+					-create  => 'yes',
+					-destroy => 'yes', 
+					-exclusive => 'yes',
+			); 
+		};  
+		if ( $@ ) { 
+		  warn "try = $try; shm_key => $shm_key;"; 
+		  $try++; 
+			if ($try > 10000) { 
+				last; 
+			}
+			if ( !$shm ) { 
+				$shm_key++;
+			}
+		}
+	}
+
+	if ( !$shm ) {
+		$this->log( "error", "Cant create shared memory segment" );
+		$this->speak("Cant create shared memory segment");
+		die $!;
+	}
+
+	# Initialize shared memory clients list
+	# Structure: hash reference with system_id => 1
+	$shm->store( encode_json( {} ) );
+	$this->shm($shm);
+  return $shm_key; 
+
+} ## end sub _init_shm
+
+=item B<_save_shm_key>
+
+Saves current shared memory segment to file named in config -> shm -> file. 
+
+=cut 
+
+sub _save_shm_key { 
+	my $this = shift; 
+	my $shm_key = shift;  
+
+  my $filename = undef; 
+
+  unless ( defined ( $this->{conf}->{'shm'}->{'file'} ) ) { 
+		$filename = '/var/run/NetSDS/smppserver.shm';
+	} else { 
+		$filename = $this->{conf}->{'shm'}->{'file'}; 
+	}
+
+  if ( -e $filename ) {  
+		# file exists 
+    $this->log( "warning", "SHM file exists."); 
+  }
+  open (SHMFILE, ">$filename") 
+		or die $! ; 
+	print SHMFILE $shm_key . "\n"; 
+	close SHMFILE; 
+
+}
+
 sub main_loop {
 
 	my ( $this, %params ) = @_;
-
+  my $t1 = time(); 
+  my $t2 = time(); 
 	# Run user defined hooks on startup
 	$this->start();
 
 	# Run main process loop
 	while ( !$this->{to_finalize} ) {
+		# Clean DLR repo 
+		$t2 = time();
+		if ( ( $t2 - $t1 ) > 60 ) { 
+				$this->{'plugindb'}->_dl_expire();
+				$t1 = time();
+		}
 
 		# Wait for incoming events on all sockets
 		my ( $sel_r, $sel_w, $sel_x ) = IO::Select->select( $this->selector, undef, undef, 0.0005 );
@@ -1752,6 +1940,16 @@ sub main_loop {
 	$this->stop();
 
 } ## end sub main_loop
+
+sub _remove_shm { 
+
+	my $this = shift; 
+
+	$this->shm(undef); 
+  $this->{to_finalize} = 1; 
+
+  return 1; 
+} 
 
 1;
 #===============================================================================
