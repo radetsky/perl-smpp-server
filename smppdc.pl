@@ -73,6 +73,9 @@ sub process {
         printf( "Kick system-id: %s\n", $this->{'kick'} );
 
         foreach my $connect_id ( keys %$list ) {
+						unless ( defined ( $list->{$connect_id}->{'login'} ) ) { 
+							next; 
+						} 
             if ( $list->{$connect_id}->{'login'} eq $this->{'kick'} ) {
                 $list->{$connect_id}->{'kick'} = 1;
                 $this->shm->lock;
@@ -82,12 +85,15 @@ sub process {
         }
     }
 		
-    if ( defined( $this->{'debug'} ) ) {
-        printf( "Debug system-id: %s\n", $this->{'debug'} );
+    if ( defined( $this->{'trace'} ) ) {
+        printf( "Trace system-id: %s\n", $this->{'trace'} );
 
         foreach my $connect_id ( keys %$list ) {
-            if ( $list->{$connect_id}->{'login'} eq $this->{'debug'} ) {
-                $list->{$connect_id}->{'debug'} = 1;
+						unless ( defined ( $list->{$connect_id}->{'login'} ) ) { 
+							next; 
+						} 
+            if ( $list->{$connect_id}->{'login'} eq $this->{'trace'} ) {
+                $list->{$connect_id}->{'trace'} = 1;
                 $this->shm->lock;
                 $this->shm->store( encode_json($list) );
                 $this->shm->unlock;
@@ -95,12 +101,15 @@ sub process {
         }
     }
 	
-    if ( defined( $this->{'nodebug'} ) ) {
-        printf( "Disable debug system-id: %s\n", $this->{'nodebug'} );
+    if ( defined( $this->{'notrace'} ) ) {
+        printf( "Disable trace system-id: %s\n", $this->{'notrace'} );
 
         foreach my $connect_id ( keys %$list ) {
-            if ( $list->{$connect_id}->{'login'} eq $this->{'nodebug'} ) {
-                $list->{$connect_id}->{'debug'} = 0;
+            unless ( defined ( $list->{$connect_id}->{'login'} ) ) { 
+							next; 
+						} 
+						if ( $list->{$connect_id}->{'login'} eq $this->{'notrace'} ) {
+                $list->{$connect_id}->{'trace'} = 0;
                 $this->shm->lock;
                 $this->shm->store( encode_json($list) );
                 $this->shm->unlock;
@@ -143,18 +152,18 @@ sub _get_cli_param {
     my ($this) = @_;
 
     my $conf   = undef;
-    my $debug  = undef;
+    my $trace  = undef;
     my $kick   = undef;
     my $reload = undef;
     my $help   = undef; 
-		my $nodebug = undef; 
+		my $notrace = undef; 
 
 
     # Get command line arguments
     GetOptions(
         'conf=s'  => \$conf,
-				'debug=s'  => \$debug,
-				'nodebug=s' => \$nodebug,
+				'trace=s'  => \$trace,
+				'notrace=s' => \$notrace,
         'kick=s'  => \$kick,
         'reload!' => \$reload,
 				'help!'   => \$help, 
@@ -170,12 +179,12 @@ sub _get_cli_param {
     }
 
     # Set debug mode
-    if ( defined $debug ) {
-        $this->{'debug'} = $debug;
+    if ( defined $trace ) {
+        $this->{'trace'} = $trace;
     }
 
-		if ( defined $nodebug ) { 
-				$this->{'nodebug'} = $nodebug; 
+		if ( defined $notrace ) { 
+				$this->{'notrace'} = $notrace; 
 		}
 
     # Set application name
@@ -213,9 +222,9 @@ sub _read_shm_key {
 sub _usage { 
 		my $this = shift; 
 
-		print "Usage: $this->{name} [ --reload | --[no]debug ESME_ID | --kick ESME_ID | --conf CONFIG ]\n"; 
+		print "Usage: $this->{name} [ --reload | --[no]trace ESME_ID | --kick ESME_ID | --conf CONFIG ]\n"; 
 		print " --reload : Send USR1 to smppserver. SMPPD2 will refresh user parameters. \n"; 
-		print " --debug  : Enable debug for ESME_ID \n"; 
+		print " --trace  : Enable debug for ESME_ID \n"; 
 		print " --conf   : Use alternative configuration file. Default ./smppserver.conf \n"; 
 		print " --kick   : Send signal to SMPPD2 to disconnect ESME_ID. \n"; 
 

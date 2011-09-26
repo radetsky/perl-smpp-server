@@ -1829,9 +1829,8 @@ sub _init_shm {
 			); 
 		};  
 		if ( $@ ) { 
-
-		  # warn "try = $try; shm_key => $shm_key;"; 
-		  #$try++; 
+		  warn "try = $try; shm_key => $shm_key;"; 
+		  $try++; 
 			if ($try > 10000) { 
 				last; 
 			}
