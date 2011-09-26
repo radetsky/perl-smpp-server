@@ -47,6 +47,7 @@ use NetSDS::Util::SMPPConvert;
 use NetSDS::Util::DateTime;
 use NetSDS::Util::String;
 use NetSDS::Util::Misc;
+use NetSDS::Util::PDUAnalyzer;
 #use NetSDS::Queue;
 use NetSDS::App::SMSTradeOutDB;
 use NetSDS::App::SMSTradeInDB;
@@ -351,6 +352,7 @@ sub start {
 
 	# Do you understand what written here ? Yes:No;
 	my $my_local_data = defined( $this->conf->{'shm'}->{'magickey'} ) ? $this->conf->{'shm'}->{'magickey'} : 'My L0c4l D4t4';
+	$this->{'magickey'} = $my_local_data; # Save for children.  
 
 	$this->shm->lock(LOCK_EX);
 	my $list = decode_json( $this->shm->fetch );
@@ -822,7 +824,7 @@ sub cmd_submit_sm {
 	my $utf8_text = '';               # message text in utf8 charset for EDR
 
 	my $mode = $hdl->{'mode'};
-
+	
 	# Check if client is authenticated
 	unless ( $hdl->{authenticated} ) {
 		$resp_status = 0x45;
@@ -1711,29 +1713,34 @@ sub _process_socket {
 			$pdu_cmd = cmd_tab->{ $pdu->{cmd} };
 		}
 
-		$this->log("info", "PDU arrived: " . Dumper ( $pdu ) );
-
+		if ($this->{debug} ) { 
+			$this->log("info", "PDU arrived: " . Dumper ( $pdu ) );
+		}
 		# Determine method name to dispatch PDU call
 		my $method_name = "cmd_" . $pdu_cmd;
 
 		if ( $pdu_cmd eq 'enquire_link' ) {
 
 			# process enqiure_link locally
+			$this->_trace_esme ( $pdu, $hdl, $pdu->{cmd} );
 			$this->cmd_enquire_link( $pdu, $hdl );
 
 		} elsif ( ( $pdu_cmd =~ /^bind_(transceiver|transmitter|receiver)/ ) and $this->can($method_name) ) {
 
 			# Process known authentication methods
+			$this->_trace_esme ( $pdu, $hdl, $pdu->{cmd} ); 
 			$this->$method_name( $pdu, $hdl );
 
 		} elsif ( $this->can($method_name) and $hdl->{authenticated} ) {
 
 			# process known PDUs
+			$this->_trace_esme ( $pdu, $hdl, $pdu->{cmd}); 
 			$this->$method_name( $pdu, $hdl );
 
 		} else {
 
 			# PDU unknown - damn it
+			$this->_trace_esme ( $pdu, $hdl, $pdu->{cmd} ); 
 			$this->cmd_unknown( $pdu, $hdl );
 
 		}
@@ -1753,13 +1760,21 @@ sub cmd_unknown {
 	my ( $this, $pdu, $hdl ) = @_;
 
 	$this->speak( " [$$] Unknown PDU arrived from " . $hdl->{id} );
-	$this->log( "warning", "Unknown PDU received, sending generic_nack" );
-	$this->log( "warning", Dumper($pdu) );
+	$this->log( "warning", "Unknown PDU received from ". $hdl->{id}." , sending generic_nack" );
+
 
 	my $resp = $hdl->{smpp}->generic_nack(
 		seq    => $pdu->{seq},
 		status => 0x00000003,    # ESME_RINVCMDID
 	);
+
+	$this->_trace_resp( $hdl, 
+		{  
+			seq    => $pdu->{seq},
+			status => 0x00000003, 
+		} 
+	);
+
 
 }
 
@@ -1772,6 +1787,7 @@ When got generic_nack PDU ignore it, but log event about it.
 sub cmd_generic_nack {
 
 	my ( $this, $pdu, $hdl ) = @_;
+
 
 	$this->speak( "[$$] Generic NACK arrived from " . $hdl->{id} );
 	$this->log( "warning", "Generic NACK arrived from " . $hdl->{id} . " Ignoring it." );
@@ -1799,10 +1815,19 @@ sub _reload {
 sub _shutup {
 	my ( $this, $login ) = @_;
 
+	my $magickey = $this->{'magickey'}; 
+	my $list = decode_json( $this->shm->fetch );
+
+
 	foreach my $hdl ( values %{ $this->handlers } ) {
 		my $system_id = $hdl->{'system_id'};
 		if ( $system_id eq $login ) {
 			my $seq = $hdl->{smpp}->unbind();
+			if ( defined ( $list->{$magickey}->{'trace'}->{$login} ) ) {
+				if ( $list->{$magickey}->{'trace'}->{$login} == 1 ) { 
+					$this->log("info","Send cmd_unbind in _shutup() method to $login"); 
+				}
+			} 	
 		}
 	}
 }
@@ -1829,7 +1854,7 @@ sub _init_shm {
 			); 
 		};  
 		if ( $@ ) { 
-		  warn "try = $try; shm_key => $shm_key;"; 
+		  $this->log("info","Init SHM: try = $try; shm_key => $shm_key;"); 
 		  $try++; 
 			if ($try > 10000) { 
 				last; 
@@ -1950,6 +1975,64 @@ sub _remove_shm {
 
   return 1; 
 } 
+
+sub cmd_enquire_link {
+
+	my ( $this, $pdu, $hdl ) = @_;
+
+
+	$this->log("info", "enquire_link from " . $hdl->{id} );
+
+	my $resp = $hdl->{smpp}->enquire_link_resp(
+		seq    => $pdu->{seq},
+		status => 0x00000000,
+	);
+
+}
+
+sub _trace_esme { 
+	my ( $this, $pdu, $hdl, $command_id ) = @_;
+
+	my $magickey = $this->{'magickey'}; 
+	my $login = $hdl->{system_id}; 
+
+  unless ( defined ($login ) ) { 
+		return undef; 
+	} 
+
+	my $list = decode_json( $this->shm->fetch );
+	unless ( defined ( $list->{$magickey}->{'tracelist'}->{$login} ) ) { 
+		return undef; 
+	} 
+	if ( $list->{$magickey}->{'tracelist'}->{$login} == 0 ) { 
+		return undef; 
+	} 
+
+  # Dump PDU 
+	$this->log("info","PDU dump for ".$login." while trace flag is on.");
+	
+	my @lines = NetSDS::Util::PDUAnalyzer->decode($command_id, $pdu);
+	foreach my $line (@lines) { 
+		$this->log("info",$line);
+	}
+
+}
+
+sub _trace_resp { 
+	my $this = shift; 
+	my $hdl  = shift; 
+	my $resp = shift; 
+
+	my $magickey = $this->{'magickey'}; 
+	my $list = decode_json( $this->shm->fetch );
+
+	my $login = $hdl->{'system_id'};
+	if ( defined ( $list->{$magickey}->{'tracelist'}->{$login} ) ) {
+		if ( $list->{$magickey}->{'tracelist'}->{$login} == 1 ) { 
+			$this->log("info","Send to $login: ". Dumper ($resp)); 
+		}
+	} 	
+}
 
 1;
 #===============================================================================

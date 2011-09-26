@@ -220,7 +220,14 @@ sub decode {
 			my $m = 'format_' . $key;
 			push @result, ( "  $key: " . $class->$m( $command_id, $pdu->{$key}, $pdu ) );
 		} else {
-			push @result, ( "  $key: " . $class->_format_universal( $pdu->{$key} ) );
+			my @formatted = $class->_format_universal ($pdu->{$key} ); 
+			my $fmt_lines_count = @formatted; 
+			if ($fmt_lines_count > 1) { 
+				push @result, ( "  $key: " ); 
+				push @result,  @formatted;
+			} else { 
+				push @result,  ( "  $key: " . join ("-", @formatted ) );
+			}
 		}
 	}
 	push @result, "PDU END";
@@ -237,6 +244,10 @@ sub _format_str {
 
 sub _format_universal {
 	my ( $cls, $arg ) = @_;
+	unless ( defined ( $arg ) ) { 
+		return '(undefined)'; 
+	} 
+
 	if ( $arg =~ /^-?[0-9]+$/ ) {
 		return $cls->_format_number($arg);
 	} elsif ( $arg =~ /^[\x20-\x7e]+$/ ) {
@@ -281,7 +292,7 @@ sub _format_hex {
 		$offset += length($src);
 	} ## end while ( length($arg) > 0 )
 	no bytes;
-	return join( "\n\t", "", @result );
+  return @result; 
 } ## end sub _format_hex
 
 sub _format_ton {
@@ -391,7 +402,7 @@ sub format_system_type {
 
 sub format_system_id {
 	my ( $self, $cmd, $value, $pdu ) = @_;
-	return $self->_format_num($value);
+	return $self->_format_number($value);
 }
 
 sub format_address_range {
@@ -413,12 +424,12 @@ sub _format_esm_class {
 		$mgsm = $self->esm_class_gsm_map->{0};
 	}
 	if ( ( $cmd == 0x04 ) || ( $cmd == 0x21 ) || ( $cmd == 0x103 ) ) {
-		my $buf   = "\n\tMessaging mode: %s\n\tMessage type: %s\n\tGSM Features: %s";
+		my $buf   = "Messaging mode: %s | Message type: %s | GSM Features: %s";
 		my $mmode = $self->esm_class_esme_mmode_map->{ ( $value & 0x03 ) };
 		my $mtype = $self->esm_class_esme_mtype_map->{ ( ( $value >> 2 ) & 0x0f ) };
 		$result = sprintf( $buf, $mmode, $mtype, $mgsm );
 	} else {
-		my $buf = "\n\tMessage type: %s\n\tGSM Features: %s";
+		my $buf = "Message type: %s | GSM Features: %s";
 		my $mtype = $self->esm_class_smsc_mtype_map->{ ( ( $value >> 2 ) & 0x0f ) };
 		$result = sprintf( $buf, $mtype, $mgsm );
 	}
@@ -432,7 +443,7 @@ sub format_esm_class {
 
 sub format_registered_delivery {
 	my ( $self, $cmd, $value, $pdu ) = @_;
-	my $buf  = "\n\tSMSC Delivery Receipt: %s\n\tSME Originated Acknowledgement: %s\n\tIntermediate Notification: %s";
+	my $buf  = "SMSC Delivery Receipt: %s | SME Originated Acknowledgement: %s | Intermediate Notification: %s";
 	my $smsc = $self->registered_delivery_smsc_dlr_map->{ ( $value & 0x03 ) };
 	my $sme  = $self->registered_delivery_sme_oa_map->{ ( ( $value >> 2 ) & 0x03 ) };
 	my $id   = $self->registered_delivery_sme_in_map->{ ( ( $value >> 4 ) & 0x01 ) };
@@ -462,7 +473,7 @@ sub format_message_state {
 
 sub format_priority_flag {
 	my ( $self, $cmd, $value, $pdu ) = @_;
-	return $self->_format_num($value);
+	return $self->_format_number($value);
 }
 
 1;

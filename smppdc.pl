@@ -41,7 +41,7 @@ use warnings;
 
 use base qw(NetSDS::App);
 
-use IPC::ShareLite;
+use IPC::ShareLite qw ( :lock );
 use JSON;
 use Data::Dumper;
 
@@ -63,6 +63,29 @@ sub start {
     $this->shm($share);
 
 } ## end sub start
+
+=item B<_set_trace_flag> ($esme,0|1) 
+
+Set/unset trace flag to ESME_ID. 
+
+=cut 
+sub _set_trace_flag { 
+
+		my $this = shift; 
+		my $esme = shift; 
+		my $flag = shift; 
+
+		my $my_local_data = defined( $this->conf->{'shm'}->{'magickey'} ) ? $this->conf->{'shm'}->{'magickey'} : 'My L0c4l D4t4';
+    my $list      = decode_json( $this->shm->fetch );
+		$list->{$my_local_data}->{'tracelist'}->{$esme} = $flag; 
+
+		$this->shm->lock (LOCK_EX); 
+    $this->shm->store( encode_json($list) );
+    $this->shm->unlock;
+
+}
+
+
 
 sub process {
     my ( $this, @params ) = @_;
@@ -87,36 +110,13 @@ sub process {
 		
     if ( defined( $this->{'trace'} ) ) {
         printf( "Trace system-id: %s\n", $this->{'trace'} );
-
-        foreach my $connect_id ( keys %$list ) {
-						unless ( defined ( $list->{$connect_id}->{'login'} ) ) { 
-							next; 
-						} 
-            if ( $list->{$connect_id}->{'login'} eq $this->{'trace'} ) {
-                $list->{$connect_id}->{'trace'} = 1;
-                $this->shm->lock;
-                $this->shm->store( encode_json($list) );
-                $this->shm->unlock;
-            }
-        }
+				$this->_set_trace_flag($this->{'trace'},1); 
     }
 	
     if ( defined( $this->{'notrace'} ) ) {
         printf( "Disable trace system-id: %s\n", $this->{'notrace'} );
-
-        foreach my $connect_id ( keys %$list ) {
-            unless ( defined ( $list->{$connect_id}->{'login'} ) ) { 
-							next; 
-						} 
-						if ( $list->{$connect_id}->{'login'} eq $this->{'notrace'} ) {
-                $list->{$connect_id}->{'trace'} = 0;
-                $this->shm->lock;
-                $this->shm->store( encode_json($list) );
-                $this->shm->unlock;
-            }
-        }
-    }
-
+				$this->_set_trace_flag($this->{'notrace'},0); 
+		}
 
     if (   ( defined( $this->{'kick'} ) )
         or ( defined( $this->{'reload'} ) ) )
