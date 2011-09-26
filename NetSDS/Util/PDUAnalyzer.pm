@@ -1,5 +1,4 @@
-#package NetSDS::Util::PDUAnalyzer;
-package Analyzer;
+package NetSDS::Util::PDUAnalyzer;
 
 =head1 NAME
 
