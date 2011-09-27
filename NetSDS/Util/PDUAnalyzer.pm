@@ -208,6 +208,45 @@ use constant {
 		0x0000000f => '(ESME_RINVSYSID) Invalid System ID',
 		0x00000011 => '(ESME_RCANCELFAIL) Cancel SM Failed',
 		0x00000013 => '(ESME_RREPLACEFAIL) Replace SM Failed',
+	},
+	data_coding_map => {
+		0x00 => 'SMSC default',
+		0x01 => 'IA5(CCITTT.50)/ASCII(ANSIX3.4)',
+		0x02 => 'Octet unspecified (8-bit binary)',
+		0x03 => 'Latin1 (ISO-8859-1)',
+		0x04 => 'Octet unspecified (8-bit binary)',
+		0x05 => 'JIS (X0208-1990)',
+		0x06 => 'Cyrillic (ISO-8859-5)',
+		0x07 => 'Latin/Hebrew (ISO-8859-8)',
+		0x08 => 'UCS2(ISO/IEC-10646)',
+		0x09 => 'Pictogram Encoding',
+		0x0a => 'ISO-2022-JP (Music Codes)',
+		0x0d => 'Extended Kanji JIS(X 0212-1990)',
+		0x0e => 'KS C 5601',
+		0xc0 => 'MWI group: discard | Indication inactive | Voicemail Message Waiting',
+		0xc1 => 'MWI group: discard | Indication inactive | Fax Message Waiting',
+		0xc2 => 'MWI group: discard | Indication inactive | Email Message Waiting',
+		0xc3 => 'MWI group: discard | Indication inactive | Other Message Waiting',
+		0xc4 => 'MWI group: discard | Indication active | Voicemail Message Waiting',
+		0xc5 => 'MWI group: discard | Indication active | Fax Message Waiting',
+		0xc6 => 'MWI group: discard | Indication active | Email Message Waiting',
+		0xc7 => 'MWI group: discard | Indication active | Other Message Waiting',
+		0xd0 => 'MWI group: store | Indication inactive | Voicemail Message Waiting',
+		0xd1 => 'MWI group: store | Indication inactive | Fax Message Waiting',
+		0xd2 => 'MWI group: store | Indication inactive | Email Message Waiting',
+		0xd3 => 'MWI group: store | Indication inactive | Other Message Waiting',
+		0xd4 => 'MWI group: store | Indication active | Voicemail Message Waiting',
+		0xd5 => 'MWI group: store | Indication active | Fax Message Waiting',
+		0xd6 => 'MWI group: store | Indication active | Email Message Waiting',
+		0xd7 => 'MWI group: store | Indication active | Other Message Waiting',
+		0xf0 => 'Message class: default alphabet | class 0',
+		0xf1 => 'Message class: default alphabet | ME-specific',
+		0xf2 => 'Message class: default alphabet | SIM-specific',
+		0xf3 => 'Message class: default alphabet | TE-specific',
+		0xf4 => 'Message class: 8-bit data | class 0',
+		0xf5 => 'Message class: 8-bit data | ME-specific',
+		0xf6 => 'Message class: 8-bit data | SIM-specific',
+		0xf7 => 'Message class: 8-bit data | TE-specific',		
 	}
 };
 
@@ -480,5 +519,14 @@ sub format_priority_flag {
 	return $this->_format_number($value);
 }
 
+sub format_data_coding {
+	my ( $this, $cmd, $value, $pdu ) = @_;
+	return $this->data_coding_map->{$value};
+}
+
+sub format_error_code {
+	my ( $this, $cmd, $value, $pdu ) = @_;
+	return $this->error_code_map->{$value};	
+}
 
 1;
