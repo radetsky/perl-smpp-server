@@ -220,13 +220,13 @@ sub decode {
 			my $m = 'format_' . $key;
 			push @result, ( "  $key: " . $class->$m( $command_id, $pdu->{$key}, $pdu ) );
 		} else {
-			my @formatted = $class->_format_universal ($pdu->{$key} ); 
-			my $fmt_lines_count = @formatted; 
-			if ($fmt_lines_count > 1) { 
-				push @result, ( "  $key: " ); 
-				push @result,  @formatted;
-			} else { 
-				push @result,  ( "  $key: " . join ("-", @formatted ) );
+			my @formatted       = $class->_format_universal( $pdu->{$key} );
+			my $fmt_lines_count = @formatted;
+			if ( $fmt_lines_count > 1 ) {
+				push @result, ("  $key: ");
+				push @result, @formatted;
+			} else {
+				push @result, ( "  $key: " . join( "-", @formatted ) );
 			}
 		}
 	}
@@ -235,38 +235,38 @@ sub decode {
 		return @result;
 	}
 	return join( "\n", @result );
-}
+} ## end sub decode
 
 sub _format_str {
-	my ( $cls, $arg ) = @_;
+	my ( $this, $arg ) = @_;
 	return "'" . $arg . "'";
 }
 
 sub _format_universal {
-	my ( $cls, $arg ) = @_;
-	unless ( defined ( $arg ) ) { 
-		return '(undefined)'; 
-	} 
+	my ( $this, $arg ) = @_;
+	unless ( defined($arg) ) {
+		return '(undefined)';
+	}
 
 	if ( $arg =~ /^-?[0-9]+$/ ) {
-		return $cls->_format_number($arg);
+		return $this->_format_number($arg);
 	} elsif ( $arg =~ /^[\x20-\x7e]+$/ ) {
-		return $cls->_format_str($arg);
+		return $this->_format_str($arg);
 	} elsif ( !defined($arg) ) {
 		return '(undefined)';
 	} else {
-		return $cls->_format_hex($arg);
+		return $this->_format_hex($arg);
 	}
 }
 
 sub _format_number {
-	my ( $cls, $arg ) = @_;
+	my ( $this, $arg ) = @_;
 	return sprintf( "%d (0x%x)", $arg, $arg );
 }
 
 sub _format_hex {
 	use bytes;
-	my ( $cls, $arg ) = @_;
+	my ( $this, $arg ) = @_;
 	my @result = ();
 	my $width  = 16;
 	my $offset = 0;
@@ -292,32 +292,32 @@ sub _format_hex {
 		$offset += length($src);
 	} ## end while ( length($arg) > 0 )
 	no bytes;
-  return @result; 
+	return @result;
 } ## end sub _format_hex
 
 sub _format_ton {
-	my ( $self, $ton ) = @_;
-	return sprintf( "%s (%x)", $self->ton_map->{$ton}, $ton );
+	my ( $this, $ton ) = @_;
+	return sprintf( "%s (%x)", $this->ton_map->{$ton}, $ton );
 }
 
 sub _format_npi {
-	my ( $self, $npi ) = @_;
-	return sprintf( "%s (%x)", $self->npi_map->{$npi}, $npi );
+	my ( $this, $npi ) = @_;
+	return sprintf( "%s (%x)", $this->npi_map->{$npi}, $npi );
 }
 
 sub format_addr_ton {
-	my ( $self, $cmd, $ton, $pdu ) = @_;
-	return $self->_format_ton($ton);
+	my ( $this, $cmd, $ton, $pdu ) = @_;
+	return $this->_format_ton($ton);
 }
 
 sub format_source_addr_ton {
-	my ( $self, $cmd, $ton, $pdu ) = @_;
-	return $self->_format_ton($ton);
+	my ( $this, $cmd, $ton, $pdu ) = @_;
+	return $this->_format_ton($ton);
 }
 
 sub format_dest_addr_ton {
-	my ( $self, $cmd, $ton, $pdu ) = @_;
-	return $self->_format_ton($ton);
+	my ( $this, $cmd, $ton, $pdu ) = @_;
+	return $this->_format_ton($ton);
 }
 
 sub format_destination_addr_ton {
@@ -325,23 +325,23 @@ sub format_destination_addr_ton {
 }
 
 sub format_esme_addr_ton {
-	my ( $self, $cmd, $ton, $pdu ) = @_;
-	return $self->_format_ton($ton);
+	my ( $this, $cmd, $ton, $pdu ) = @_;
+	return $this->_format_ton($ton);
 }
 
 sub format_addr_npi {
-	my ( $self, $cmd, $npi, $pdu ) = @_;
-	return $self->_format_npi($npi);
+	my ( $this, $cmd, $npi, $pdu ) = @_;
+	return $this->_format_npi($npi);
 }
 
 sub format_source_addr_npi {
-	my ( $self, $cmd, $npi, $pdu ) = @_;
-	return $self->_format_npi($npi);
+	my ( $this, $cmd, $npi, $pdu ) = @_;
+	return $this->_format_npi($npi);
 }
 
 sub format_dest_addr_npi {
-	my ( $self, $cmd, $npi, $pdu ) = @_;
-	return $self->_format_npi($npi);
+	my ( $this, $cmd, $npi, $pdu ) = @_;
+	return $this->_format_npi($npi);
 }
 
 sub format_destination_addr_npi {
@@ -349,12 +349,12 @@ sub format_destination_addr_npi {
 }
 
 sub format_esme_addr_npi {
-	my ( $self, $cmd, $npi, $pdu ) = @_;
-	return $self->_format_npi($npi);
+	my ( $this, $cmd, $npi, $pdu ) = @_;
+	return $this->_format_npi($npi);
 }
 
 sub format_interface_version {
-	my ( $self, $cmd, $value, $pdu ) = @_;
+	my ( $this, $cmd, $value, $pdu ) = @_;
 	return "SMPP version " . ( ( $value >> 4 ) & 0x0F ) . "." . ( $value & 0x0F );
 }
 
@@ -363,27 +363,31 @@ sub format_interface_type {
 }
 
 sub format_command_id {
-	my ( $self, $cmd, $value, $pdu ) = @_;
-	my $result = $self->command_id_map->{$cmd};
+	my ( $this, $cmd, $value, $pdu ) = @_;
+	my $result = $this->command_id_map->{$cmd};
 	if ( !$result ) {
 		return sprintf( "unknown command_id, %d (0x%08x)", $cmd, $cmd );
 	}
 	return $result;
 }
 
+sub format_cmd {
+	return format_command_id(@_);
+}
+
 sub format_esme_addr {
-	my ( $self, $cmd, $value, $pdu ) = @_;
-	return $self->_format_str($value);
+	my ( $this, $cmd, $value, $pdu ) = @_;
+	return $this->_format_str($value);
 }
 
 sub format_source_addr {
-	my ( $self, $cmd, $value, $pdu ) = @_;
-	return $self->_format_str($value);
+	my ( $this, $cmd, $value, $pdu ) = @_;
+	return $this->_format_str($value);
 }
 
 sub format_dest_addr {
-	my ( $self, $cmd, $value, $pdu ) = @_;
-	return $self->_format_str($value);
+	my ( $this, $cmd, $value, $pdu ) = @_;
+	return $this->_format_str($value);
 }
 
 sub format_destination_addr {
@@ -391,89 +395,90 @@ sub format_destination_addr {
 }
 
 sub format_service_type {
-	my ( $self, $cmd, $value, $pdu ) = @_;
-	return $self->_format_str($value);
+	my ( $this, $cmd, $value, $pdu ) = @_;
+	return $this->_format_str($value);
 }
 
 sub format_system_type {
-	my ( $self, $cmd, $value, $pdu ) = @_;
-	return $self->_format_str($value);
+	my ( $this, $cmd, $value, $pdu ) = @_;
+	return $this->_format_str($value);
 }
 
 sub format_system_id {
-	my ( $self, $cmd, $value, $pdu ) = @_;
-	return $self->_format_number($value);
+	my ( $this, $cmd, $value, $pdu ) = @_;
+	return $this->_format_number($value);
 }
 
 sub format_address_range {
-	my ( $self, $cmd, $value, $pdu ) = @_;
-	return $self->_format_str($value);
+	my ( $this, $cmd, $value, $pdu ) = @_;
+	return $this->_format_str($value);
 }
 
 sub _format_esm_class {
-	my ( $self, $value, $cmd ) = @_;
+	my ( $this, $value, $cmd ) = @_;
 	my @mgsm_buf = ();
 	my $result;
-	foreach my $k ( keys( %{ $self->esm_class_gsm_map } ) ) {
+	foreach my $k ( keys( %{ $this->esm_class_gsm_map } ) ) {
 		if ( ( $value >> 6 ) & $k ) {
-			push @mgsm_buf, $self->esm_class_gsm_map->{$k};
+			push @mgsm_buf, $this->esm_class_gsm_map->{$k};
 		}
 	}
 	my $mgsm = join( " / ", @mgsm_buf );
 	unless ($mgsm) {
-		$mgsm = $self->esm_class_gsm_map->{0};
+		$mgsm = $this->esm_class_gsm_map->{0};
 	}
 	if ( ( $cmd == 0x04 ) || ( $cmd == 0x21 ) || ( $cmd == 0x103 ) ) {
 		my $buf   = "Messaging mode: %s | Message type: %s | GSM Features: %s";
-		my $mmode = $self->esm_class_esme_mmode_map->{ ( $value & 0x03 ) };
-		my $mtype = $self->esm_class_esme_mtype_map->{ ( ( $value >> 2 ) & 0x0f ) };
+		my $mmode = $this->esm_class_esme_mmode_map->{ ( $value & 0x03 ) };
+		my $mtype = $this->esm_class_esme_mtype_map->{ ( ( $value >> 2 ) & 0x0f ) };
 		$result = sprintf( $buf, $mmode, $mtype, $mgsm );
 	} else {
 		my $buf = "Message type: %s | GSM Features: %s";
-		my $mtype = $self->esm_class_smsc_mtype_map->{ ( ( $value >> 2 ) & 0x0f ) };
+		my $mtype = $this->esm_class_smsc_mtype_map->{ ( ( $value >> 2 ) & 0x0f ) };
 		$result = sprintf( $buf, $mtype, $mgsm );
 	}
 	return $result;
 } ## end sub _format_esm_class
 
 sub format_esm_class {
-	my ( $self, $cmd, $value, $pdu ) = @_;
-	return $self->_format_esm_class( $value, $cmd );
+	my ( $this, $cmd, $value, $pdu ) = @_;
+	return $this->_format_esm_class( $value, $cmd );
 }
 
 sub format_registered_delivery {
-	my ( $self, $cmd, $value, $pdu ) = @_;
-	my $buf  = "SMSC Delivery Receipt: %s | SME Originated Acknowledgement: %s | Intermediate Notification: %s";
-	my $smsc = $self->registered_delivery_smsc_dlr_map->{ ( $value & 0x03 ) };
-	my $sme  = $self->registered_delivery_sme_oa_map->{ ( ( $value >> 2 ) & 0x03 ) };
-	my $id   = $self->registered_delivery_sme_in_map->{ ( ( $value >> 4 ) & 0x01 ) };
+	my ( $this, $cmd, $value, $pdu ) = @_;
+	my $buf    = "SMSC Delivery Receipt: %s | SME Originated Acknowledgement: %s | Intermediate Notification: %s";
+	my $smsc   = $this->registered_delivery_smsc_dlr_map->{ ( $value & 0x03 ) };
+	my $sme    = $this->registered_delivery_sme_oa_map->{ ( ( $value >> 2 ) & 0x03 ) };
+	my $id     = $this->registered_delivery_sme_in_map->{ ( ( $value >> 4 ) & 0x01 ) };
 	my $result = sprintf( $buf, $smsc, $sme, $id );
 	return $result;
 }
 
 sub format_protocol_id {
-	my ( $self, $cmd, $value, $pdu ) = @_;
+	my ( $this, $cmd, $value, $pdu ) = @_;
 	my $result = '';
 	if ( ( $value & 0xC0 ) == 0 ) {
 		if ( $value & 0x20 ) {
-			$result = 'Telematic interworking: ' . $self->protocol_id_telematic_map->{ ( $value & 0x1f ) };
+			$result = 'Telematic interworking: ' . $this->protocol_id_telematic_map->{ ( $value & 0x1f ) };
 		} else {
-			$result = 'SME-to-SME: ' . $self->protocol_id_telematic_map->{ ( $value & 0x1f ) };
+			$result = 'SME-to-SME: ' . $this->protocol_id_telematic_map->{ ( $value & 0x1f ) };
 		}
 	} elsif ( ( $value & 0xC0 ) == 0x40 ) {
-		$result = $self->protocol_id_replace_map->{ ( $value & 0x3f ) };
+		$result = $this->protocol_id_replace_map->{ ( $value & 0x3f ) };
 	}
 	return $result;
 }
 
 sub format_message_state {
-	my ( $self, $cmd, $value, $pdu ) = @_;
-	return $self->message_state_map->{$value};
+	my ( $this, $cmd, $value, $pdu ) = @_;
+	return $this->message_state_map->{$value};
 }
 
 sub format_priority_flag {
-	my ( $self, $cmd, $value, $pdu ) = @_;
-	return $self->_format_number($value);
+	my ( $this, $cmd, $value, $pdu ) = @_;
+	return $this->_format_number($value);
 }
+
 
 1;
