@@ -22,6 +22,8 @@
 use 5.8.0;
 use strict;
 use warnings;
+use diagnostics -verbose; 
+
 
 SMPPServerV2->run(
 	daemon      => undef,
@@ -1557,8 +1559,8 @@ sub _deliver_sm {
 		if ( defined ( $this->{conf}->{'in_queue'}->{'check_delivery_requests'} ) ) { 
 			if ( ( $esm_class == 4 ) and ( defined  ( $mo->{receipted_message_id} ) ) ) {
 				unless ( defined ( $this->{'plugindb'}->_get_dl_request ( $mo->{receipted_message_id} ) ) ) { 
-					$this->log('warning','Delete DLR with message.id='.$message_id.' because registered_delivery was not found. ');  
-					$this->{'plugoutdb'}->_delete_mo($message_id); 
+					$this->log('warning','Delete DLR with message_id='.$message_id.' because registered_delivery was not found. ');  
+					$this->{'plugoutdb'}->_delete_mo($mo->{'internal_id'}); 
 				}	
 			}
 		}

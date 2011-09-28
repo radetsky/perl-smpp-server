@@ -27,6 +27,7 @@ use Net::SMPP;
 use Time::HiRes qw(gettimeofday tv_interval);
 
 use DBI;
+use JSON; 
 
 use NetSDS::Util::Convert;
 
@@ -301,6 +302,23 @@ else {
 #}
 
 print "Test No. 14. Complete. 1000 sockets created. \n";
+
+
+# Test #15. Create DLR for last message.
+
+my $hr    = $dbh->selectrow_hashref("select * from delivery_requests order by expire desc limit 1"); 
+my $msgid = $hr->{'message_id'}; 
+my $tlv = { receipted_message_id => $msgid };
+my $extra = to_json( $tlv, { ascii => 1, pretty => 1 } );
+my $dlr   = "id:$msgid sub:001 dlvrd:001 submit date:1011190000 done date:1011192359 stat:DELIVRD err:E Text: Hello, World! ";
+
+ $sth = $dbh->prepare_cached("insert into messages ( msg_type, esme_id, src_addr, dst_addr, body, coding, udh, mwi, mclass, message_id, validity, deferred, registered_delivery, service_type, extra ) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,? ) ");
+$sth->execute( 'DLR', 1, '0504139380', 'smppsvrtst.pl', $dlr, 0, undef, undef, 4, $msgid, 1440, undef, undef, undef, $extra );
+
+# Test #16. Receive DLR 
+$pdu = $cli->read_pdu() or die;
+$pdu = $cli->read_pdu() or die;
+warn Dumper ($pdu); 
 
 #############################################################################
 

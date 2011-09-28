@@ -213,7 +213,7 @@ sub _delete_mo {
 		$table = $this->{conf}->{'out_queue'}->{'table'};
 	}
 
-    $this->_connect_db;
+  $this->_connect_db;
 	$this->msgdbh->do( "delete from " . $table . " where id=$mo_id" );
 
 }
