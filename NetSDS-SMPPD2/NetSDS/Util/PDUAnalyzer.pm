@@ -521,12 +521,12 @@ sub format_priority_flag {
 
 sub format_data_coding {
 	my ( $this, $cmd, $value, $pdu ) = @_;
-	return $this->data_coding_map->{$value};
+	return sprintf("%s (%02x)", $this->data_coding_map->{$value}, $value);
 }
 
 sub format_error_code {
 	my ( $this, $cmd, $value, $pdu ) = @_;
-	return $this->error_code_map->{$value};	
+	return sprintf("%s (%04x)", $this->error_code_map->{$value}, $value);	
 }
 
 1;
