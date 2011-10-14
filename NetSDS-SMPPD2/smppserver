@@ -22,7 +22,7 @@
 use 5.8.0;
 use strict;
 use warnings;
-use diagnostics -verbose; 
+#use diagnostics -verbose; 
 
 
 SMPPServerV2->run(
@@ -31,7 +31,7 @@ SMPPServerV2->run(
 	use_pidfile => 1,
 	has_conf    => 1,
 	debug       => undef,
-	conf_file   => "./smppserver.conf",
+	conf_file   => "/etc/NetSDS/smppserver.conf",
 );
 
 1;
