@@ -93,4 +93,11 @@ UNLOCK TABLES;
 /*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
+
+create table delivery_requests ( 
+	message_id varchar(64) NOT NULL, 
+	expire timestamp NOT NULL default now()
+) ENGINE=MyISAM DEFAULT CHARSET=utf8;
+
+
 -- Dump completed on 2010-09-10 19:19:26
