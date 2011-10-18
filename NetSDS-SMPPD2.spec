@@ -24,11 +24,17 @@ Packager: Dmitriy Kruglikov <dkr@netstyle.com.ua>
 BuildArch: noarch
 Source0: %module-%version.tar
 
-BuildRequires: perl-libwww
 
 # Automatically added by buildreq on Mon Mar 08 2010 (-bi)
-BuildRequires: perl-CGI perl-HTML-Template-Pro perl-JSON perl-JSON-XS perl-Locale-gettext
+BuildRequires: perl-libwww 
+BuildRequires: perl-NetSDS
+BuildRequires: perl-CGI 
+BuildRequires: perl-HTML-Template-Pro 
+BuildRequires: perl-JSON 
+BuildRequires: perl-JSON-XS 
+BuildRequires: perl-Locale-gettext
 
+Requires: perl-libwww 
 Requires:  perl-NetSDS
 
 %description
