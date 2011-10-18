@@ -33,6 +33,7 @@ BuildRequires: perl-HTML-Template-Pro
 BuildRequires: perl-JSON 
 BuildRequires: perl-JSON-XS 
 BuildRequires: perl-Locale-gettext
+BuildRequires: perl-Module-Build
 
 Requires: perl-libwww 
 Requires:  perl-NetSDS
