@@ -3,7 +3,6 @@
 #SERVPIDFILE=/var/run/NetSDS/smppserver.pid
 
 while :; do
-    cd /opt/NetSDS/bin
-    ./smppserver —daemon 
+    /usr/sbin/smppserver --daemon --conf=/etc/NetSDS/smppserver.conf
     sleep 1
 done

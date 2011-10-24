@@ -2,7 +2,7 @@
 #
 # smppserver	Summary of the service.
 #
-# chkconfig: - 90 10
+# chkconfig: 2345 90 10
 # description:	multi-line \
 #		description \
 #		of the service.
@@ -22,7 +22,7 @@ RETVAL=0
 
 start()
 {
-	/opt/NetSDS/bin/smppserver.sh
+	/usr/sbin/smppserver_safe_start.sh 2>&1 > /dev/null &
 	RETVAL=$?
 	return $RETVAL
 }
