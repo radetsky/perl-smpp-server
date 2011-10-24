@@ -72,7 +72,7 @@ install -m 640 smppserver.conf %buildroot%_sysconfdir/NetSDS/smppserver.conf
 cp -r contrib %buildroot%_datadir/NetSDS/smppserver
 cp -r sql %buildroot%_datadir/NetSDS/smppserver
 
-%pre
+%post
 %post_service smppserver
 
 %preun
