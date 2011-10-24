@@ -87,7 +87,7 @@ cp -r sql %buildroot%_datadir/NetSDS/smppserver
 %config(noreplace) %_sysconfdir/NetSDS/smppserver.conf
 %config(noreplace) %_initdir/smppserver
 %config(noreplace) %_sysconfdir/monit.d/smppserver
-#%doc NetSDS-SMPPD2/doc/*
+%doc doc/*
 
 %files contrib
 %_datadir/NetSDS/smppserver/contrib
