@@ -9,7 +9,7 @@
 
 Name: NetSDS-SMPPD2
 Version: 2.101
-Release: alt1
+Release: alt2
 
 Summary: NetSDS-SMPPD2 - is an 
 
@@ -25,6 +25,7 @@ Source0: %module-%version.tar
 
 
 # Automatically added by buildreq on Mon Mar 08 2010 (-bi)
+BuildRequires: Nibelite-core
 BuildRequires: perl-libwww 
 BuildRequires: perl-NetSDS
 BuildRequires: perl-CGI 
@@ -37,6 +38,7 @@ BuildRequires: perl-Module-Build
 Requires: perl-libwww 
 Requires: perl-NetSDS
 Requires: monit-base
+Requires: Nibelite-core
 
 %description
 NetSDS-SMPPD2 is an 
@@ -93,5 +95,8 @@ cp -r sql %buildroot%_datadir/NetSDS/smppserver
 %_datadir/NetSDS/smppserver/contrib
 
 %changelog
+* Mon Oct 24 2011 Dmitriy Kruglikov <dkr@netstyle.com.ua> 2.101-alt2
+- Added Requres for Nibelite-core
+
 * Mon Oct 17 2011 Dmitriy Kruglikov <dkr@netstyle.com.ua> 2.101-alt1
 - Initial build
