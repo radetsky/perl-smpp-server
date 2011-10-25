@@ -1,6 +1,6 @@
-check process smppserver with pidfile /var/run/NetSDS/smppserver.pid
+check process smppserver2 with pidfile /var/run/NetSDS/smppserver2.pid
 	group smppserver
 	group netsds
-	start program = "/sbin/service smppserver start"
-	stop  program = "/sbin/service smppserver stop"
+	start program = "/sbin/service smppserver2 start"
+	stop  program = "/sbin/service smppserver2 stop"
 	if 5 restarts within 5 cycles then timeout

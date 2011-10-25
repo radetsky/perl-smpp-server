@@ -27,7 +27,7 @@ SMPPdSTAT->run(
 	daemon    => undef,
 	verbose   => 1,
 	has_conf  => 1,
-	conf_file => "./smppserver.conf",
+	conf_file => "./smppserver2.conf",
   infinite  => undef, 
 );
 

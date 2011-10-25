@@ -31,7 +31,7 @@ SMPPServerV2->run(
 	use_pidfile => 1,
 	has_conf    => 1,
 	debug       => undef,
-	conf_file   => "/etc/NetSDS/smppserver.conf",
+	conf_file   => "/etc/NetSDS/smppserver2.conf",
 );
 
 1;

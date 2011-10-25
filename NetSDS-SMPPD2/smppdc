@@ -27,7 +27,7 @@ smppdc->run(
     daemon    => undef,
     verbose   => 1,
     has_conf  => 1,
-    conf_file => "./smppserver.conf",
+    conf_file => "./smppserver2.conf",
     infinite  => 0,
 );
 
@@ -207,7 +207,7 @@ sub _get_cli_param {
 sub _read_shm_key {
     my $this = shift;
 
-    my $filename = '/var/run/NetSDS/smppserver.shm';
+    my $filename = '/var/run/NetSDS/smppserver2.shm';
     if ( defined( $this->{conf}->{'shm'}->{'file'} ) ) {
         $filename = $this->{conf}->{'shm'}->{'file'};
     }

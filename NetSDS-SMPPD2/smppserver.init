@@ -16,13 +16,13 @@ WITHOUT_RC_COMPAT=1
 # Source function library.
 . /etc/init.d/functions
 
-PIDFILE=/var/run/NetSDS/smppserver.pid
-LOCKFILE=/var/lock/subsys/smppserver
+PIDFILE=/var/run/NetSDS/smppserver2.pid
+LOCKFILE=/var/lock/subsys/smppserver2
 RETVAL=0
 
 start()
 {
-	/usr/sbin/smppserver_safe_start.sh 2>&1 > /dev/null &
+	/usr/sbin/smppserver2_safe_start.sh 2>&1 > /dev/null &
 	RETVAL=$?
 	return $RETVAL
 }
