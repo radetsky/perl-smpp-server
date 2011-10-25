@@ -6,10 +6,9 @@
 %define _enable_test 1
 %def_without test
 
-
 Name: NetSDS-SMPPD2
 Version: 2.101
-Release: alt4
+Release: alt5
 
 Summary: NetSDS-SMPPD2 - is an 
 
@@ -62,7 +61,6 @@ Requires: %name = %version-%release
 %description contrib
 %summary
 
-
 %prep
 %setup -q -n %m_distro-%version
 
@@ -75,6 +73,7 @@ mkdir -p %buildroot%_sbindir
 mkdir -p %buildroot%_initdir
 mkdir -p %buildroot%_sysconfdir/{monit.d,NetSDS}
 mkdir -p %buildroot%_datadir/NetSDS/smppserver2
+mkdir -p %buildroot/%_runtimedir/NetSDS
 install -m 755 smppserver %buildroot%_sbindir/smppserver2
 install -m 755 smppserver_safe_start.sh %buildroot%_sbindir/smppserver2_safe_start.sh
 install -m 755 smppserver.init %buildroot%_initdir/smppserver2
@@ -99,11 +98,15 @@ cp -r sql %buildroot%_datadir/NetSDS/smppserver2
 %config(noreplace) %_initdir/smppserver2
 %config(noreplace) %_sysconfdir/monit.d/smppserver2
 %doc doc/*
+%dir %_runtimedir/NetSDS
 
 %files contrib
 %_datadir/NetSDS/smppserver2/contrib
 
 %changelog
+* Tue Oct 25 2011 Dmitriy Kruglikov <dkr@netstyle.com.ua> 2.101-alt5
+- Add /var/run/NetSDS creation.
+
 * Tue Oct 25 2011 Dmitriy Kruglikov <dkr@netstyle.com.ua> 2.101-alt4
 - Cleared Requirements 
 
