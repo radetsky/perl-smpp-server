@@ -34,7 +34,9 @@ BuildRequires: perl-JSON
 BuildRequires: perl-JSON-XS 
 BuildRequires: perl-Locale-gettext
 BuildRequires: perl-Module-Build
+BuildRequires: perl-Net-SMPP
 
+Requires: perl-Net-SMPP
 Requires: perl-libwww 
 Requires: perl-NetSDS
 Requires: monit-base
@@ -95,6 +97,9 @@ cp -r sql %buildroot%_datadir/NetSDS/smppserver2
 %_datadir/NetSDS/smppserver2/contrib
 
 %changelog
+* Tue Oct 25 2011 Dmitriy Kruglikov <dkr@netstyle.com.ua> 2.101-alt3
+- Added Requres for perl-Net-SMPP
+
 * Tue Oct 25 2011 Dmitriy Kruglikov <dkr@netstyle.com.ua> 2.101-alt3
 - Files renamed for run v1 and v2 together.
 
