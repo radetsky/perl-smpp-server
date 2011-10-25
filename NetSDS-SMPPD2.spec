@@ -9,7 +9,7 @@
 
 Name: NetSDS-SMPPD2
 Version: 2.101
-Release: alt3
+Release: alt4
 
 Summary: NetSDS-SMPPD2 - is an 
 
@@ -25,24 +25,31 @@ Source0: %module-%version.tar
 
 
 # Automatically added by buildreq on Mon Mar 08 2010 (-bi)
-BuildRequires: Nibelite-core
-BuildRequires: perl-libwww 
 BuildRequires: perl-NetSDS
-BuildRequires: perl-CGI 
-BuildRequires: perl-HTML-Template-Pro 
 BuildRequires: perl-JSON 
 BuildRequires: perl-JSON-XS 
-BuildRequires: perl-Locale-gettext
 BuildRequires: perl-Module-Build
 BuildRequires: perl-Net-SMPP
 BuildRequires: perl-IPC-ShareLite
+BuildRequires: perl-Data-Structure-Util 
+BuildRequires: perl-Unix-Syslog
+BuildRequires: perl-Data-UUID
+BuildRequires: perl-DBI
+BuildRequires: perl-DBD-pg
+BuildRequires: perl-DBD-mysql
 
-Requires: perl-IPC-ShareLite
-Requires: perl-Net-SMPP
-Requires: perl-libwww 
 Requires: perl-NetSDS
-Requires: monit-base
-Requires: Nibelite-core
+Requires: perl-JSON 
+Requires: perl-JSON-XS 
+Requires: perl-Net-SMPP
+Requires: perl-IPC-ShareLite
+Requires: perl-Data-Structure-Util 
+Requires: perl-Unix-Syslog
+Requires: perl-Data-UUID
+Requires: perl-DBI
+Requires: perl-DBD-pg
+Requires: perl-DBD-mysql
+
 
 %description
 NetSDS-SMPPD2 is an 
@@ -55,8 +62,6 @@ Requires: %name = %version-%release
 %description contrib
 %summary
 
-
-%add_findreq_skiplist */*template*/*pl
 
 %prep
 %setup -q -n %m_distro-%version
@@ -99,6 +104,9 @@ cp -r sql %buildroot%_datadir/NetSDS/smppserver2
 %_datadir/NetSDS/smppserver2/contrib
 
 %changelog
+* Tue Oct 25 2011 Dmitriy Kruglikov <dkr@netstyle.com.ua> 2.101-alt4
+- Cleared Requirements 
+
 * Tue Oct 25 2011 Dmitriy Kruglikov <dkr@netstyle.com.ua> 2.101-alt3
 - Added Requres for perl-IPC-ShareLite
 
