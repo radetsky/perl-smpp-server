@@ -35,7 +35,7 @@ BuildRequires: perl-Data-Structure-Util
 BuildRequires: perl-Unix-Syslog
 BuildRequires: perl-Data-UUID
 BuildRequires: perl-DBI
-BuildRequires: perl-DBD-pg
+BuildRequires: perl-DBD-Pg
 BuildRequires: perl-DBD-mysql
 
 Requires: perl-NetSDS
@@ -47,7 +47,7 @@ Requires: perl-Data-Structure-Util
 Requires: perl-Unix-Syslog
 Requires: perl-Data-UUID
 Requires: perl-DBI
-Requires: perl-DBD-pg
+Requires: perl-DBD-Pg
 Requires: perl-DBD-mysql
 
 
