@@ -96,7 +96,7 @@ cp -r sql %buildroot%_datadir/NetSDS/smppserver2
 %_datadir/NetSDS/smppserver2/sql
 %config(noreplace) %_sysconfdir/NetSDS/smppserver2.conf
 %config(noreplace) %_initdir/smppserver2
-%config(noreplace) %_sysconfdir/monit.d/smppserver2
+%config(noreplace) %_sysconfdir/monitrc.d/smppserver2
 %doc doc/*
 %dir %_runtimedir/NetSDS
 
