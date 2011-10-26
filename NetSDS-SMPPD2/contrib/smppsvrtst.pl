@@ -33,9 +33,9 @@ use NetSDS::Util::Convert;
 
 my $fail = 0;
 
-my $dsn      = 'DBI:mysql:database=smppserver;host=localhost';
-my $user     = 'smppserver';
-my $password = 'smppserver';
+my $dsn      = 'DBI:mysql:database=mydb;host=localhost';
+my $user     = 'netstyle';
+my $password = '';
 
 sub fail_pdu {
     my ( $n, $pdu ) = @_;
