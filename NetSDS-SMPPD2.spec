@@ -8,7 +8,7 @@
 
 Name: NetSDS-SMPPD2
 Version: 2.101
-Release: alt6
+Release: alt7
 
 Summary: NetSDS-SMPPD2 - is an 
 
@@ -104,6 +104,9 @@ cp -r sql %buildroot%_datadir/NetSDS/smppserver2
 %_datadir/NetSDS/smppserver2/contrib
 
 %changelog
+* Wed Oct 26 2011 Dmitriy Kruglikov <dkr@netstyle.com.ua> 2.101-alt7
+- Version Up for last tests.
+
 * Wed Oct 26 2011 Dmitriy Kruglikov <dkr@netstyle.com.ua> 2.101-alt6
 - Fixed smppserver.conf and smppserver.init
 
