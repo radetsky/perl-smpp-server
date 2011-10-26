@@ -27,9 +27,8 @@ DATABASE PREPARING
 $ mysql -u root -p 
 > create database mydb;
 > use mydb; 
-> source mydb.sql
+> source smppserver.sql
 > source edr.sql 
-> source dlr.dlr 
 
 Grant all privileges on new database to some user. 
 

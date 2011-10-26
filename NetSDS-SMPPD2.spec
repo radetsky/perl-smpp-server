@@ -8,7 +8,7 @@
 
 Name: NetSDS-SMPPD2
 Version: 2.101
-Release: alt5
+Release: alt6
 
 Summary: NetSDS-SMPPD2 - is an 
 
@@ -71,13 +71,13 @@ Requires: %name = %version-%release
 %perl_vendor_install
 mkdir -p %buildroot%_sbindir
 mkdir -p %buildroot%_initdir
-mkdir -p %buildroot%_sysconfdir/{monit.d,NetSDS}
+mkdir -p %buildroot%_sysconfdir/{monitrc.d,NetSDS}
 mkdir -p %buildroot%_datadir/NetSDS/smppserver2
 mkdir -p %buildroot/%_runtimedir/NetSDS
 install -m 755 smppserver %buildroot%_sbindir/smppserver2
 install -m 755 smppserver_safe_start.sh %buildroot%_sbindir/smppserver2_safe_start.sh
 install -m 755 smppserver.init %buildroot%_initdir/smppserver2
-install -m 755 smppserver.monit %buildroot%_sysconfdir/monit.d/smppserver2
+install -m 755 smppserver.monit %buildroot%_sysconfdir/monitrc.d/smppserver2
 install -m 640 smppserver.conf %buildroot%_sysconfdir/NetSDS/smppserver2.conf
 cp -r contrib %buildroot%_datadir/NetSDS/smppserver2
 cp -r sql %buildroot%_datadir/NetSDS/smppserver2
@@ -104,6 +104,9 @@ cp -r sql %buildroot%_datadir/NetSDS/smppserver2
 %_datadir/NetSDS/smppserver2/contrib
 
 %changelog
+* Wed Oct 26 2011 Dmitriy Kruglikov <dkr@netstyle.com.ua> 2.101-alt6
+- Fixed smppserver.conf and smppserver.init
+
 * Tue Oct 25 2011 Dmitriy Kruglikov <dkr@netstyle.com.ua> 2.101-alt5
 - Add /var/run/NetSDS creation.
 

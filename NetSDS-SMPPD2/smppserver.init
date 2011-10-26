@@ -22,7 +22,7 @@ RETVAL=0
 
 start()
 {
-	/usr/sbin/smppserver2_safe_start.sh 2>&1 > /dev/null &
+	/usr/sbin/smppserver2 --daemon --pidfile $PIDFILE
 	RETVAL=$?
 	return $RETVAL
 }
