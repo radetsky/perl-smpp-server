@@ -37,6 +37,7 @@ BuildRequires: perl-DBI
 BuildRequires: perl-DBD-Pg
 BuildRequires: perl-DBD-mysql
 
+Requires: NetSDS-common
 Requires: perl-NetSDS
 Requires: perl-JSON 
 Requires: perl-JSON-XS 
@@ -73,7 +74,6 @@ mkdir -p %buildroot%_sbindir
 mkdir -p %buildroot%_initdir
 mkdir -p %buildroot%_sysconfdir/{monitrc.d,NetSDS}
 mkdir -p %buildroot%_datadir/NetSDS/smppserver2
-mkdir -p %buildroot/%_runtimedir/NetSDS
 install -m 755 smppserver %buildroot%_sbindir/smppserver2
 install -m 755 smppserver_safe_start.sh %buildroot%_sbindir/smppserver2_safe_start.sh
 install -m 755 smppserver.init %buildroot%_initdir/smppserver2
@@ -98,7 +98,6 @@ cp -r sql %buildroot%_datadir/NetSDS/smppserver2
 %config(noreplace) %_initdir/smppserver2
 %config(noreplace) %_sysconfdir/monitrc.d/smppserver2
 %doc doc/*
-%dir %_runtimedir/NetSDS
 
 %files contrib
 %_datadir/NetSDS/smppserver2/contrib
