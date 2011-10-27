@@ -8,7 +8,7 @@
 
 Name: NetSDS-SMPPD2
 Version: 2.101
-Release: alt7
+Release: alt8
 
 Summary: NetSDS-SMPPD2 - is an 
 
@@ -103,6 +103,10 @@ cp -r sql %buildroot%_datadir/NetSDS/smppserver2
 %_datadir/NetSDS/smppserver2/contrib
 
 %changelog
+* Thu Oct 27 2011 Dmitriy Kruglikov <dkr@netstyle.com.ua> 2.101-alt8
+- Used NetSDS-common instead /var/run/NetSDS creation.
+- Tester smppsvrtst.pl used same DB and auth.
+
 * Wed Oct 26 2011 Dmitriy Kruglikov <dkr@netstyle.com.ua> 2.101-alt7
 - Version Up for last tests.
 
