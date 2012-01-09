@@ -60,7 +60,7 @@ CREATE TABLE `messages` (
   `processed` timestamp NOT NULL default CURRENT_TIMESTAMP,
   `src_addr` varchar(32) default NULL,
   `dst_addr` varchar(32) default NULL,
-  `body` varchar(512) default NULL,
+  `body` text default NULL,
   `coding` int(11) default '0',
   `udh` varchar(512) default NULL,
   `mwi` int(11) default NULL,
