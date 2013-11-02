@@ -1,0 +1,6 @@
+Hi, All! 
+
+This is a SMPP v.3.4 server written in pure perl 5.8 using Net::SMPP.  
+Please read doc/*.txt to understand why and what you may do with it. 
+
+
