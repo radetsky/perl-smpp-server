@@ -1,21 +1,21 @@
 #!/usr/bin/env perl 
 #===============================================================================
 #
-#         FILE:  smppsvrtst.pl
+#         FILE:  DLRtest.pl
 #
-#        USAGE:  ./smppsvrtst.pl
+#        USAGE:  ./DLRTest.pl
 #
-#  DESCRIPTION:  Test cases for smppserver v 2.x
+#  DESCRIPTION:  Test DLR cases for smppserver v 2.x
 #
 #      OPTIONS:  ---
 # REQUIREMENTS:  ---
 #         BUGS:  ---
 #        NOTES:  ---
 #       AUTHOR:  Alex Radetsky (Rad), <rad@rad.kiev.ua>
-#      COMPANY:  Net.Style
-#      VERSION:  1.0
-#      CREATED:  29.08.10 20:56:45 EEST
-#     REVISION:  ---
+#      COMPANY:  PearlPBX
+#      VERSION:  2.0
+#      CREATED:  08.12.13
+#     REVISION:  001
 #===============================================================================
 
 use 5.8.0;
@@ -23,7 +23,6 @@ use strict;
 use warnings;
 
 use Data::Dumper;
-use Net::SMPP;
 use Time::HiRes qw(gettimeofday tv_interval);
 
 use DBI;
@@ -31,23 +30,67 @@ use JSON;
 
 use NetSDS::Util::Convert;
 
-my $dsn      = 'DBI:mysql:database=mydb;host=192.168.1.53';
-my $user     = 'netstyle';
-my $password = '';
+my $dsn      = 'DBI:mysql:database=smpp;host=127.0.0.1';
+my $user     = 'smpp';
+my $password = 'smpp234';
 
 my $dbh = DBI->connect_cached( $dsn, $user, $password );
 unless ( defined($dbh) ) {
 	die "fail: can't connect to database. DSN: '$dsn'\n";
 }
 
-my $tlv = { message_state => 2, receipted_message_id => '1010101010101010101' };
-my $extra = to_json( $tlv, { ascii => 1, pretty => 1 } );
-my $dlr   = "id:1111111111 sub:001 dlvrd:001 submit date:1011190000 done date:1011192359 stat:DELIVRD err:E Text: Hello, World! ";
+while (1) { 
+	my $msgs = $dbh->selectall_hashref("select * from messages order by id","id"); 
+	foreach my $dbid ( keys %{$msgs} ) { 
+		create_dlr($msgs->{$dbid});
+		delete_dbid($dbid); 
+	} 
+}
 
-my $sth = $dbh->prepare_cached("insert into messages ( msg_type, esme_id, src_addr, dst_addr, body, coding, udh, mwi, mclass, message_id, validity, deferred, registered_delivery, service_type, extra ) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,? ) ");
-$sth->execute( 'DLR', 3, '0504139380', 'smppsvrtst.pl', $dlr, 0, undef, undef, 4, '1010101010101010101', 1440, undef, undef, undef, $extra );
+sub create_dlr { 
+	my $msg = shift; 
+	my $tlv = { message_state => 2, receipted_message_id => $msg->{'message_id'} };
+	my $extra = to_json( $tlv, { ascii => 1, pretty => 1 } );
+	my $dlr   = sprintf("id:%s sub:001 dlvrd:001 submit date:%s done date:%s stat:%s err:0 Text:%s", 
+		substr($msg->{'message_id'},0,10),
+		submit_date($msg->{'received'}), 
+		submit_date($msg->{'received'}), 
+		rand_stat(), 
+		"DLR Test."); 
 
-#EOF
+	printf("[DLR] %s\n",$dlr); 
+
+	my $sth = $dbh->prepare_cached("insert into messages ( msg_type, esme_id, src_addr, dst_addr, body, coding, udh, mwi, mclass, message_id, validity, deferred, registered_delivery, service_type, extra ) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,? ) ");
+	$sth->execute( 'DLR', $msg->{'esme_id'}, $msg->{'dst_addr'}, $msg->{'src_addr'}, $dlr, 0, undef, undef, 4, $msg->{'message_id'}, 1440, undef, undef, undef, $extra );
+}
+
+sub submit_date { 
+	my $str = shift; 
+	my $y = substr($str,0,4); 
+	my $m = substr($str,6,2); 
+	my $d = substr($str,9,2); 
+	my $h = substr($str,11,2); 
+	my $mm = substr($str,14,2); 
+
+	my $result = sprintf("%s%s%s%s%s",$y,$m,$d,$h,$mm); 
+	print "$result\n"; 
+	exit(0); 
+}
+
+sub rand_stat { 
+	my $i = int(rand(2)); 
+	if ($i < 2 ) { 
+		return 'DELIVRD'; 
+	} else { 
+		return 'UNDELIV'; 
+	}
+}
+
+sub delete_dbid { 
+	my $id = shift; 
+	printf("[DEL] $id\n"); 
+	$dbh->do("delete from messages where id=$id"); 
+}
 
 1;
 #===============================================================================
