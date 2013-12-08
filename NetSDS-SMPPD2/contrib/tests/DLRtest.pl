@@ -40,11 +40,12 @@ unless ( defined($dbh) ) {
 }
 
 while (1) { 
-	my $msgs = $dbh->selectall_hashref("select * from messages order by id","id"); 
+	my $msgs = $dbh->selectall_hashref("select * from messages where msg_type='MT' order by id","id"); 
 	foreach my $dbid ( keys %{$msgs} ) { 
 		create_dlr($msgs->{$dbid});
 		delete_dbid($dbid); 
-	} 
+	}
+	sleep (3); 
 }
 
 sub create_dlr { 
@@ -67,14 +68,12 @@ sub create_dlr {
 sub submit_date { 
 	my $str = shift; 
 	my $y = substr($str,0,4); 
-	my $m = substr($str,6,2); 
-	my $d = substr($str,9,2); 
+	my $m = substr($str,5,2); 
+	my $d = substr($str,8,2); 
 	my $h = substr($str,11,2); 
 	my $mm = substr($str,14,2); 
 
-	my $result = sprintf("%s%s%s%s%s",$y,$m,$d,$h,$mm); 
-	print "$result\n"; 
-	exit(0); 
+	return sprintf("%s%s%s%s%s",$y,$m,$d,$h,$mm); 
 }
 
 sub rand_stat { 
