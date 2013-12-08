@@ -24,13 +24,14 @@ use strict;
 use warnings;
 #use diagnostics -verbose; 
 
+use lib './lib'; 
 
 SMPPServerV2->run(
 	daemon      => 1,
 	verbose     => 1,
 	use_pidfile => 1,
 	has_conf    => 1,
-	debug       => undef,
+	debug       => 1,
 	conf_file   => "/etc/NetSDS/smppserver2.conf",
 );
 
