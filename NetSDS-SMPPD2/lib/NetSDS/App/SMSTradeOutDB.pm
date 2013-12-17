@@ -72,7 +72,7 @@ sub new {
 	my $this = $class->SUPER::new();
 	$this->{shm} = $shm; 
 	$this->{conf} = $conf; 
-
+	$this->{debug} = 1; 
 	return $this;
 
 }
@@ -213,7 +213,7 @@ sub _delete_mo {
 		$table = $this->{conf}->{'out_queue'}->{'table'};
 	}
 
-  $this->_connect_db;
+  	$this->_connect_db;
 	$this->msgdbh->do( "delete from " . $table . " where id=$mo_id" );
 
 }
@@ -231,20 +231,25 @@ sub _connect_db {
 		$user   = $this->{conf}->{'out_queue'}->{'db-user'};
 		$passwd = $this->{conf}->{'out_queue'}->{'db-password'};
 	}
+
 	while (1) {
 		# If DBMS isn' t accessible - try reconnect
 
 		if ( !$this->msgdbh or !$this->msgdbh->ping ) {
+			if ( $this->{debug} ) { 
+				warn ("[OUTQ] Connecting to database: $dsn,$user"); 
+			}
 			$this->msgdbh( DBI->connect_cached( $dsn, $user, $passwd, { RaiseError => 1 } ) );
 		}
 
 		if ( !$this->msgdbh ) {
+			$this->speak("Can't connect to DBMS. Waiting for 30 sec. "); 
 			$this->log( "error", "Cant connect to DBMS! Waiting for 30 sec." );
 			sleep(30);
 			next;
 		}
 
-    if ( defined ( $this->{conf}->{'out_queue'}->{'mysql-set-names'} ) ) {
+    		if ( defined ( $this->{conf}->{'out_queue'}->{'mysql-set-names'} ) ) {
 			    my $q = 'set names ' . $this->{conf}->{'in_queue'}->{'mysql-set-names'};
 					$this->msgdbh->do ($q);
 		}

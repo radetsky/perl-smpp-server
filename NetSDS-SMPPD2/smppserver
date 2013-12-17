@@ -190,7 +190,7 @@ sub initialize {
 
 	if ( $this->{debug} ) { 
 		$this->log("info","Setting USR1 signal handler");
-  }
+ 	 }
 	 $SIG{USR1} = sub {
    		$this->speak("SIGUSR1 caught");
    		$this->log( "info", "SIGUSR1 caught" );
@@ -255,10 +255,10 @@ sub initialize {
 	# Initialize MO/DLR selector
 	my $plugoutdb = NetSDS::App::SMSTradeOutDB->new( $this->shm, $this->{conf} );
 	$this->{'plugoutdb'} = $plugoutdb;
-
-	if ( $this->{debug} ) { 
-		$this->log("info","Initialize listener");
-  }
+	if ( $this->{debug} ) {
+		$this->speak("Initialize MO/DLR selector: $plugoutdb");  
+		$this->speak("Initialize listener.");
+  	}
 
 	# Initialize listening socket and add to select()
 	$this->_init_listener();
@@ -276,6 +276,9 @@ sub initialize {
 sub _process_mo_dlr {
 	my $this = shift;
 
+	if ( $this->{debug} ) { 
+		$this->speak("Process MO-DLR"); 
+	}	
 	my $messages = $this->{'plugoutdb'}->_process_mo_dlr();
 	if ( $messages == 0 ) {
 		return;
@@ -1054,6 +1057,7 @@ sub cmd_submit_sm {
 		message_id => $message_id,
 		async      => 1,
 	);
+	alarm 1; 
 
 } ## end sub cmd_submit_sm
 
@@ -1255,6 +1259,7 @@ sub cmd_bind_transceiver {
 	my $status = undef;
 
 	if ( $resp_status == 0x00 ) {
+		alarm 2; 
 		$status = 'OK';
 	} else {
 		$status = 'FAIL';
