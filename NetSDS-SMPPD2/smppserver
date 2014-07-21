@@ -5,7 +5,7 @@
 #
 #        USAGE:  ./smppd.pl
 #
-#  DESCRIPTION:  NetSDS SMPP Server 2
+#  DESCRIPTION:  NetSDS SMPP Server 2.2 
 #
 #      OPTIONS:  ---
 # REQUIREMENTS:
@@ -17,6 +17,7 @@
 #      VERSION:  2.1
 #      CREATED:  12.07.2009 15:15:03 UTC
 #     MODIFIED:  21.09.2011   
+#     MODIFIED:  11.07.2014 
 #===============================================================================
 
 use 5.8.0;
@@ -42,6 +43,8 @@ use 5.8.0;
 use strict;
 use warnings;
 
+use lib './lib'; 
+
 use base qw(NetSDS::App::SMPP);
 
 use NetSDS::Util::Convert;
@@ -50,7 +53,6 @@ use NetSDS::Util::DateTime;
 use NetSDS::Util::String;
 use NetSDS::Util::Misc;
 use NetSDS::Util::PDUAnalyzer;
-#use NetSDS::Queue;
 use NetSDS::App::SMSTradeOutDB;
 use NetSDS::App::SMSTradeInDB;
 use IPC::ShareLite qw ( :lock );
@@ -100,7 +102,7 @@ sub initialize {
 
 	$this->speak("[$$] NetSDS SMPPServer v2.1 initializing application.");
 
-  # Determine application name from process name
+    # Determine application name from process name
 	if ( !$this->{name} ) {
 		$this->_determine_name();
 	}
@@ -112,7 +114,7 @@ sub initialize {
 		$this->speak ("[$$] Debug enabled. ");
 	}
 
-  if ( $this->{debug} ) { 
+    if ( $this->{debug} ) { 
 		$this->speak ("[$$] Reading configuration. ");
 	} 
 
@@ -134,10 +136,11 @@ sub initialize {
 		}
 	}
 
-
 	# Daemonize, if needed
 	if ( $this->daemon() ) {
-		$this->speak("[$$] Daemonize, switch verbosity to false.");
+		if ( $this->{debug} ) { 
+			$this->speak("[$$] Daemonize, switch verbosity to false.");
+		} 
 		$this->{verbose} = undef;
 		Proc::Daemon::Init;
 	}
@@ -145,27 +148,24 @@ sub initialize {
 	# Create syslog handler
 	if ( !$this->logger ) {
 		$this->logger( NetSDS::Logger->new( name => $this->{name} ) );
-		$this->log( "info", "NetSDS SMPPServer v.2.1 logger started" );
+		$this->log( "info", "NetSDS SMPPServer v.2.2. Logger started" );
 	}
 
-  # Get PID filename
+  	# Get PID filename
 	if ( $this->{debug} ) { 
 		$this->log( "info", "Working with PID file.");
 	} 
-
 	my $pidfilename = undef; 
 	unless ( defined ( $this->{conf}->{'pidfilename'} ) ) { 
 		$pidfilename = $this->{name}; 
 	} else { 
 		$pidfilename = $this->{conf}->{'pidfilename'}; 
 	} 
-
 	if ( $this->{debug} ) {
 		$this->log ( "info", "pidfilename = $pidfilename" ); 
 	}
 
 	# Process PID file if necessary
-	
 	if ( $this->use_pidfile ) {
 		if ( Proc::PID::File->running( dir => $this->pid_dir, name => $pidfilename ) ) {
 			$this->log( "error", "Application already running, stop immediately!" );
@@ -176,8 +176,7 @@ sub initialize {
 	# Update PID if necessary
 	$this->{pid} = $$;
 
-  # Working with ALARM signal because we want to process MO and DLR every second.
-
+    # Working with ALARM signal because we want to process MO and DLR every second. 
 	if ( $this->{debug} ) { 
 		$this->log("info", "Setting ALRM signal handler");
 	}		
@@ -189,67 +188,31 @@ sub initialize {
 
 	if ( $this->{debug} ) { 
 		$this->log("info","Setting USR1 signal handler");
-  }
-	 $SIG{USR1} = sub {
+  	}
+	
+	$SIG{USR1} = sub {
    		$this->speak("SIGUSR1 caught");
    		$this->log( "info", "SIGUSR1 caught" );
-   		$this->_kick();      # Seek and destrou
+   		$this->_kick();      # Seek and destroy
    		$this->_reload();    # Reload users configuration
 	};
 
 	if ( $this->{debug} ) { 
-		$this->log("info","Setting TERM and INT signal handlers.");
-  }
-
-	$SIG{TERM} = sub { 
-			$this->_remove_shm();
-	}; 
-	$SIG{INT} = sub { 
-			$this->_remove_shm();
-	}; 
-
-	if ( $this->{debug} ) { 
-		$this->log("info", "Initialize shared memory.");
-  }
-
-	# Initialize SHM area
-	my $shm_key = $this->_init_shm();
-
-	if ( $this->{debug} ) { 
-		$this->log("info", "Save got segment number $shm_key to file.");
-  }
-
-  # Save SHM key
-  $this->{conf}->{'shm'}->{'segment'} = $shm_key; 
-
-  # Write SHM key to file 
-  $this->_save_shm_key($shm_key); 
-	
-	if ( $this->{debug} ) { 
 		$this->log("info", "Initialize EDR subsystem");
-  }
-
+    }
 	# Initialize Event Data Recording subsystem
 	$this->_edr_init();
 
 	if ( $this->{debug} ) { 
-		$this->log("info", "Create select() handler");
-  }
-
-	# Create select() handler for incoming events
-	$this->selector( IO::Select->new() );
-
-	if ( $this->{debug} ) { 
 		$this->log("info", "Initialize input queue plugin");
-  }
-
+    }
 	# Initialize queue for incoming (MT) events
 	my $plugindb = NetSDS::App::SMSTradeInDB->new( $this->{conf} );
 	$this->{'plugindb'} = $plugindb;
 
 	if ( $this->{debug} ) { 
 		$this->log("info","Initialize output queue plugin");
-  }
+    }
 
 	# Initialize MO/DLR selector
 	my $plugoutdb = NetSDS::App::SMSTradeOutDB->new( $this->shm, $this->{conf} );
@@ -257,28 +220,26 @@ sub initialize {
 
 	if ( $this->{debug} ) { 
 		$this->log("info","Initialize listener");
-  }
-
-	# Initialize listening socket and add to select()
-	$this->_init_listener();
-	$this->selector->add( $this->listener );
+    }
 
 	if ( $this->{debug} ) { 
 		$this->log("info","Setting initial array of handlers");
-  }
+    }
 
 	# Set initial empty array of handlers hashref
 	$this->handlers( {} );
+	$this->{'connections'} = undef; 
 
 } ## end sub initialize
 
 sub _process_mo_dlr {
 	my $this = shift;
 
-	my $messages = $this->{'plugoutdb'}->_process_mo_dlr();
+	my $messages = $this->{'plugoutdb'}->_process_mo_dlr($this->{'shm'});
 	if ( $messages == 0 ) {
 		return;
 	}
+
 	foreach my $somekey ( keys %$messages ) {
 		my $queue_msg = $messages->{$somekey};
 		my $delivered = $this->_process_out_message($queue_msg);
@@ -345,22 +306,27 @@ sub start {
 
 	my ($this) = @_;
 
-	$this->speak("[$$] Start SMPPServerV2 ");
+	$this->speak("[$$] Start SMPPServer v2.2 ");
 	$this->_edr_write( { event_name => 'Start Server' } );
 
 	# Connect to authentication DBMS
 	$this->mk_accessors('authdbh');
 	$this->_connect_db;
 
-	# Do you understand what written here ? Yes:No;
-	my $my_local_data = defined( $this->conf->{'shm'}->{'magickey'} ) ? $this->conf->{'shm'}->{'magickey'} : 'My L0c4l D4t4';
-	$this->{'magickey'} = $my_local_data; # Save for children.  
 
-	$this->shm->lock(LOCK_EX);
-	my $list = decode_json( $this->shm->fetch );
-	$list->{$my_local_data}->{'start_timestamp'} = time;
-	$this->shm->store( encode_json($list) );
-	$this->shm->unlock;
+	# Версия 2.2 - удаляем использование shared memory 
+
+
+	# Do you understand what written here ? Yes:No;
+	# my $my_local_data = defined( $this->conf->{'shm'}->{'magickey'} ) ? $this->conf->{'shm'}->{'magickey'} : 'My L0c4l D4t4';
+	# $this->{'magickey'} = $my_local_data; # Save for children.  
+	# $this->shm->lock(LOCK_EX);
+	# my $list = decode_json( $this->shm->fetch );
+	# $list->{$my_local_data}->{'start_timestamp'} = time;
+	# $this->shm->store( encode_json($list) );
+	# $this->shm->unlock;
+
+	$this->{'shm'} = undef; # Теперь тут мы будем хранить то, что раньше было в shm. 
 
 	# Fill the Local-system-id value
 	if ( defined( $this->conf->{'smpp'}->{'local_system_id'} ) ) {
@@ -520,15 +486,13 @@ Increase received messages value
 sub _increase_received {
 	my ( $this, $connect_id ) = @_;
 
-	$this->shm->lock(LOCK_EX);
-	my $list = decode_json( $this->shm->fetch );
+	my $list = $this->{'shm'};
 	unless ( defined( $list->{$connect_id}->{'received'} ) ) {
 		$list->{$connect_id}->{'received'} = 1;
 	} else {
 		$list->{$connect_id}->{'received'} = $list->{$connect_id}->{'received'} + 1;
 	}
-	$this->shm->store( encode_json($list) );
-	$this->shm->unlock;
+	$this->{'shm'} = $list;
 
 	my $login = $list->{$connect_id}->{'login'};
 	$ESME->{$login}->{'received'} = $ESME->{$login}->{'received'} + 1;
@@ -544,15 +508,13 @@ Increase sent messages value
 sub _increase_sent {
 	my ( $this, $connect_id ) = @_;
 
-	$this->shm->lock(LOCK_EX);
-	my $list = decode_json( $this->shm->fetch );
+	my $list = $this->{'shm'}; 
 	unless ( defined( $list->{$connect_id}->{'sent'} ) ) {
 		$list->{$connect_id}->{'sent'} = 1;
 	} else {
 		$list->{$connect_id}->{'sent'} = $list->{$connect_id}->{'sent'} + 1;
 	}
-	$this->shm->store( encode_json($list) );
-	$this->shm->unlock;
+	$this->{'shm'} = $list; 
 
 	my $login = $list->{$connect_id}->{'login'};
 	$ESME->{$login}->{'sent'} = $ESME->{$login}->{'sent'} + 1;
@@ -574,10 +536,9 @@ sub _increase_already_connected {
 		return undef;    # Do not authorize.
 
 	}
-	$ESME->{$system_id}->{'already_connected'} = $ESME->{$system_id}->{'already_connected'} + 1;
 
-	$this->shm->lock(LOCK_EX);
-	my $list = decode_json( $this->shm->fetch );
+	$ESME->{$system_id}->{'already_connected'} = $ESME->{$system_id}->{'already_connected'} + 1;
+	my $list = $this->{'shm'}; 
 
 	foreach my $connect_id ( keys %$list ) {
 		if ( defined( $list->{$connect_id}->{'login'} ) ) {
@@ -586,10 +547,7 @@ sub _increase_already_connected {
 			}
 		}
 	}
-
-	$this->shm->store( encode_json($list) );
-	$this->shm->unlock;
-
+	$this->{'shm'} = $list; 
 	$this->log( "info", "ESME \"$system_id\" already connected " . $ESME->{$system_id}->{'already_connected'} . " times" );
 
 	return 1;
@@ -610,6 +568,7 @@ sub _decrease_already_connected {
 		$this->log( "error", "Try to decrease already_connected for unexistent login $login" );
 		return undef;
 	}
+
 	$ESME->{$login}->{'already_connected'} = $ESME->{$login}->{'already_connected'} - 1;
 	if ( $ESME->{$login}->{'already_connected'} < 0 ) {
 		$this->log( "error", "Decreased already_connected for $login < 0!" );
@@ -617,8 +576,7 @@ sub _decrease_already_connected {
 		return 1;
 	}
 
-	$this->shm->lock(LOCK_EX);
-	my $list = decode_json( $this->shm->fetch );
+	my $list = $this->{'shm'}; 
 
 	foreach my $connect_id ( keys %$list ) {
 		if ( defined( $list->{$connect_id}->{'login'} ) ) {
@@ -627,8 +585,8 @@ sub _decrease_already_connected {
 			}
 		}
 	}
-	$this->shm->store( encode_json($list) );
-	$this->shm->unlock;
+	$this->{'shm'} = $list; 
+
 	$this->log( "info", "Decrease already_connected for $login to " . $ESME->{$login}->{'already_connected'} );
 	return 1;
 
@@ -644,7 +602,7 @@ sub _connect_db {
 
 	# If DBMS isn' t accessible - try reconnect
 	if ( !$this->authdbh or !$this->authdbh->ping ) {
-		$this->authdbh( DBI->connect_cached( $dsn, $user, $passwd, { RaiseError => 1 } ) );
+		$this->authdbh( DBI->connect_cached( $dsn, $user, $passwd, { RaiseError => 1, AutoCommit =>1, mysql_auto_reconnect=>1 } ) );
 	}
 
 	if ( !$this->authdbh ) {
@@ -1092,11 +1050,7 @@ sub cmd_unbind {
 	# decrease already connected value for system_id
 	$this->_decrease_already_connected( $hdl->{system_id} );
 
-	$this->shm->lock(LOCK_EX);
-	my $list = decode_json( $this->shm->fetch );
-	delete $list->{ $hdl->{id} };
-	$this->shm->store( encode_json($list) );
-	$this->shm->unlock;
+	delete $this->{'shm'}->{ $hdl->{id} };
 
 	# Remove socket from select()
 	$this->selector->remove( $hdl->{smpp} );
@@ -1210,8 +1164,8 @@ sub cmd_bind_transceiver {
 				$this->{handlers}->{ $hdl->{id} }->{system_id}     = $login;
 				$this->{handlers}->{ $hdl->{id} }->{mode}          = 'transceiver';
 
-				# Update SHM struture
-				my $list       = decode_json( $this->shm->fetch );
+				# Update SHM structure
+				my $list       = $this->{'shm'}; 
 				my $connect_id = $hdl->{id};
 
 				$list->{$connect_id}->{'esme_id'}           = $ESME->{$login}->{'esme_id'};
@@ -1222,9 +1176,8 @@ sub cmd_bind_transceiver {
 				$list->{$connect_id}->{'received'}          = $ESME->{$login}->{'received'};
 				$list->{$connect_id}->{'login'}             = $login;
 
-				$this->shm->lock(LOCK_EX);
-				$this->shm->store( encode_json($list) );
-				$this->shm->unlock;
+				$this->{'shm'} = $list; 
+
 			} ## end if ( $resp_status == 0x00)
 
 		} else {
@@ -1314,7 +1267,7 @@ sub cmd_bind_transmitter {
 				$this->{handlers}->{ $hdl->{id} }->{mode}          = 'transmitter';
 
 				# Update SHM struture
-				my $list       = decode_json( $this->shm->fetch );
+				my $list       = $this->{'shm'}; 
 				my $connect_id = $hdl->{id};
 
 				$list->{$connect_id}->{'login'}             = $login;
@@ -1325,9 +1278,7 @@ sub cmd_bind_transmitter {
 				$list->{$connect_id}->{'sent'}              = $ESME->{$login}->{'sent'};
 				$list->{$connect_id}->{'received'}          = $ESME->{$login}->{'received'};
 
-				$this->shm->lock(LOCK_EX);
-				$this->shm->store( encode_json($list) );
-				$this->shm->unlock;
+				$this->{'shm'} = $list;
 
 			} ## end if ( $resp_status == 0x00)
 
@@ -1413,7 +1364,7 @@ sub cmd_bind_receiver {
 				$this->{handlers}->{ $hdl->{id} }->{mode}          = 'receiver';
 
 				# Update SHM struture
-				my $list       = decode_json( $this->shm->fetch );
+				my $list       = $this->{'shm'}; 
 				my $connect_id = $hdl->{id};
 
 				$list->{$connect_id}->{'login'}             = $login;
@@ -1424,9 +1375,8 @@ sub cmd_bind_receiver {
 				$list->{$connect_id}->{'sent'}              = $ESME->{$login}->{'sent'};
 				$list->{$connect_id}->{'received'}          = $ESME->{$login}->{'received'};
 
-				$this->shm->lock(LOCK_EX);
-				$this->shm->store( encode_json($list) );
-				$this->shm->unlock;
+				$this->{'shm'} = $list; 
+
 			} ## end if ( $resp_status == 0x00)
 
 		} else {
@@ -1662,17 +1612,14 @@ sub _process_socket {
 		delete $this->{handlers}->{ $hdl->{id} };
 		
 		my $login = $hdl->{system_id};
-		$this->shm->lock(LOCK_EX);
-		my $list = decode_json( $this->shm->fetch );
-		delete $list->{ $hdl->{id} };
-		$this->shm->store( encode_json($list) );
-		$this->shm->unlock;
+		delete $this->{'shm'}->{ $hdl->{id} };
 		
 		$this->speak("[$$] Socket for $peer_addr : $peer_port closed.");
 		$this->log("info","Socket for $peer_addr : $peer_port closed.");
 
     return undef; 
 	} ## end unless ( defined($pdu) )
+
 	if ( !$pdu ) {
 
 		# Disconnect if EOF
@@ -1693,12 +1640,10 @@ sub _process_socket {
 			delete $this->{handlers}->{ $hdl->{id} };
 
 			my $login = $hdl->{system_id};
-			$this->shm->lock(LOCK_EX);
-			my $list = decode_json( $this->shm->fetch );
-			delete $list->{ $hdl->{id} };
-			$this->shm->store( encode_json($list) );
-			$this->shm->unlock;
+			
+			delete $this->{'shm'}->{ $hdl->{id} };
 
+			
 			$this->speak("[$$] Socket for $peer_addr : $peer_port closed.");
 			$this->log("info","Socket for $peer_addr : $peer_port closed.");
 
@@ -1799,7 +1744,7 @@ sub cmd_generic_nack {
 sub _kick {
 	my $this = shift;
 
-	my $list = decode_json( $this->shm->fetch );
+	my $list = $this->{'shm'}; 
 	foreach my $connect_id ( keys %$list ) {
 		if ( defined( $list->{$connect_id}->{'kick'} ) ) {
 			my $login = $list->{$connect_id}->{'login'};
@@ -1810,23 +1755,20 @@ sub _kick {
 
 sub _reload {
 	my $this = shift;
-  $this->log("warning","Got USR1. Reloading."); 
-
+  	$this->log("warning","Got USR1. Reloading."); 
 }
 
 sub _shutup {
 	my ( $this, $login ) = @_;
 
-	my $magickey = $this->{'magickey'}; 
-	my $list = decode_json( $this->shm->fetch );
-
+	my $list = $this->{'shm'}; 
 
 	foreach my $hdl ( values %{ $this->handlers } ) {
 		my $system_id = $hdl->{'system_id'};
 		if ( $system_id eq $login ) {
 			my $seq = $hdl->{smpp}->unbind();
-			if ( defined ( $list->{$magickey}->{'trace'}->{$login} ) ) {
-				if ( $list->{$magickey}->{'trace'}->{$login} == 1 ) { 
+			if ( defined ( $this->{'trace'}->{$login} ) ) {
+				if ( $this->{'trace'}->{$login} == 1 ) { 
 					$this->log("info","Send cmd_unbind in _shutup() method to $login"); 
 				}
 			} 	
@@ -1834,97 +1776,85 @@ sub _shutup {
 	}
 }
 
-sub _init_shm {
-  my ($this) = @_;
+sub cmd_enquire_link {
 
-  my $shm_key = 1965;	
-  my $shm = undef;
-	my $try = 0; 
+	my ( $this, $pdu, $hdl ) = @_;
 
-	if ( defined ( $this->{conf}->{'shm'}->{'segment'} ) ) { 
-		$shm_key =  $this->{conf}->{'shm'}->{'segment'};
-	}
+	$this->log("info", "enquire_link from " . $hdl->{id} );
 
-	# Create SHM segment for data exchange
-  while ( !$shm ) { 
-	  eval { 
-	    $shm = IPC::ShareLite->new (
-		  		-key     => $shm_key,
-					-create  => 'yes',
-					-destroy => 'yes', 
-					-exclusive => 'yes',
-			); 
-		};  
-		if ( $@ ) { 
-		  $this->log("info","Init SHM: try = $try; shm_key => $shm_key;"); 
-		  $try++; 
-			if ($try > 10000) { 
-				last; 
-			}
-			if ( !$shm ) { 
-				$shm_key++;
-			}
-		}
-	}
-
-	if ( !$shm ) {
-		$this->log( "error", "Cant create shared memory segment" );
-		$this->speak("Cant create shared memory segment");
-		die $!;
-	}
-
-	# Initialize shared memory clients list
-	# Structure: hash reference with system_id => 1
-	$shm->store( encode_json( {} ) );
-	$this->shm($shm);
-  return $shm_key; 
-
-} ## end sub _init_shm
-
-=item B<_save_shm_key>
-
-Saves current shared memory segment to file named in config -> shm -> file. 
-
-=cut 
-
-sub _save_shm_key { 
-	my $this = shift; 
-	my $shm_key = shift;  
-
-  my $filename = undef; 
-
-  unless ( defined ( $this->{conf}->{'shm'}->{'file'} ) ) { 
-		$filename = '/var/run/NetSDS/smppserver.shm';
-	} else { 
-		$filename = $this->{conf}->{'shm'}->{'file'}; 
-	}
-
-  if ( -e $filename ) {  
-		# file exists 
-    $this->log( "warning", "SHM file exists."); 
-  }
-  open (SHMFILE, ">$filename") 
-		or die $! ; 
-	print SHMFILE $shm_key . "\n"; 
-	close SHMFILE; 
+	my $resp = $hdl->{smpp}->enquire_link_resp(
+		seq    => $pdu->{seq},
+		status => 0x00000000,
+	);
 
 }
 
-sub main_loop {
+sub _trace_esme { 
+	my ( $this, $pdu, $hdl, $command_id ) = @_;
+
+	my $login = $hdl->{system_id}; 
+
+    unless ( defined ($login ) ) { 
+		return undef; 
+	} 
+
+	unless ( defined ( $this->{'trace'}->{$login} ) ) { 
+		return undef; 
+	} 
+	if ( $this->{'trace'}->{$login} == 0 ) { 
+		return undef; 
+	} 
+
+    # Dump PDU 
+	$this->log("info","PDU dump for ".$login." while trace flag is on.");
+	
+	my @lines = NetSDS::Util::PDUAnalyzer->decode($command_id, $pdu);
+	foreach my $line (@lines) { 
+		$this->log("info",$line);
+	}
+
+}
+
+sub _trace_resp { 
+	my $this = shift; 
+	my $hdl  = shift; 
+	my $resp = shift; 
+
+	my $login = $hdl->{'system_id'};
+	if ( defined ( $this->{'trace'}->{$login} ) ) {
+		if ( $this->{'trace'}->{$login} == 1 ) { 
+			$this->log("info","Send to $login: ". Dumper ($resp)); 
+		}
+	} 	
+}
+
+sub main_loop { 
+
+
+
+
+}
+
+sub main_loop_old {
 
 	my ( $this, %params ) = @_;
-  my $t1 = time(); 
-  my $t2 = time(); 
+	my $t1 = time(); 
+	my $t2 = time(); 
+
 	# Run user defined hooks on startup
 	$this->start();
 
 	# Run main process loop
 	while ( !$this->{to_finalize} ) {
 		# Clean DLR repo 
+		# When check_delivery_requests is set 
+		# One time per 10 minutes
 		$t2 = time();
-		if ( ( $t2 - $t1 ) > 60 ) { 
+		if ( ( $t2 - $t1 ) > 600 ) {  
+			if ( defined ( $this->{conf}->{'in_queue'}->{'check_delivery_requests'} ) ) { 
 				$this->{'plugindb'}->_dl_expire();
 				$t1 = time();
+			}
 		}
 
 		# Wait for incoming events on all sockets
@@ -1968,73 +1898,8 @@ sub main_loop {
 
 } ## end sub main_loop
 
-sub _remove_shm { 
-
-	my $this = shift; 
-
-	$this->shm(undef); 
-  $this->{to_finalize} = 1; 
-
-  return 1; 
-} 
-
-sub cmd_enquire_link {
-
-	my ( $this, $pdu, $hdl ) = @_;
 
 
-	$this->log("info", "enquire_link from " . $hdl->{id} );
-
-	my $resp = $hdl->{smpp}->enquire_link_resp(
-		seq    => $pdu->{seq},
-		status => 0x00000000,
-	);
-
-}
-
-sub _trace_esme { 
-	my ( $this, $pdu, $hdl, $command_id ) = @_;
-
-	my $magickey = $this->{'magickey'}; 
-	my $login = $hdl->{system_id}; 
-
-  unless ( defined ($login ) ) { 
-		return undef; 
-	} 
-
-	my $list = decode_json( $this->shm->fetch );
-	unless ( defined ( $list->{$magickey}->{'tracelist'}->{$login} ) ) { 
-		return undef; 
-	} 
-	if ( $list->{$magickey}->{'tracelist'}->{$login} == 0 ) { 
-		return undef; 
-	} 
-
-  # Dump PDU 
-	$this->log("info","PDU dump for ".$login." while trace flag is on.");
-	
-	my @lines = NetSDS::Util::PDUAnalyzer->decode($command_id, $pdu);
-	foreach my $line (@lines) { 
-		$this->log("info",$line);
-	}
-
-}
-
-sub _trace_resp { 
-	my $this = shift; 
-	my $hdl  = shift; 
-	my $resp = shift; 
-
-	my $magickey = $this->{'magickey'}; 
-	my $list = decode_json( $this->shm->fetch );
-
-	my $login = $hdl->{'system_id'};
-	if ( defined ( $list->{$magickey}->{'tracelist'}->{$login} ) ) {
-		if ( $list->{$magickey}->{'tracelist'}->{$login} == 1 ) { 
-			$this->log("info","Send to $login: ". Dumper ($resp)); 
-		}
-	} 	
-}
 
 1;
 #===============================================================================
@@ -2069,7 +1934,6 @@ Empty.
 
 Michael Bochkaryov <misha@rattler.kiev.ua>
 Alex Radetsky <rad@rad.kiev.ua>
-
 
 =cut
 
