@@ -30,7 +30,7 @@ use JSON;
 
 use NetSDS::Util::Convert;
 
-my $dsn      = 'DBI:mysql:database=smpp;host=127.0.0.1';
+my $dsn      = 'DBI:mysql:database=smpp;host=localhost';
 my $user     = 'smpp';
 my $password = 'smpp234';
 
@@ -38,6 +38,8 @@ my $dbh = DBI->connect_cached( $dsn, $user, $password );
 unless ( defined($dbh) ) {
 	die "fail: can't connect to database. DSN: '$dsn'\n";
 }
+
+printf("Connected to database.\n"); 
 
 while (1) { 
 	my $msgs = $dbh->selectall_hashref("select * from messages where msg_type='MT' order by id","id"); 
@@ -78,7 +80,7 @@ sub submit_date {
 
 sub rand_stat { 
 	my $i = int(rand(2)); 
-	if ($i < 2 ) { 
+	if ($i < 1 ) { 
 		return 'DELIVRD'; 
 	} else { 
 		return 'UNDELIV'; 

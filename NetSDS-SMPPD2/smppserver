@@ -25,13 +25,14 @@ use strict;
 use warnings;
 #use diagnostics -verbose; 
 
+use lib './lib'; 
 
 SMPPServerV2->run(
 	daemon      => 1,
 	verbose     => 1,
 	use_pidfile => 1,
 	has_conf    => 1,
-	debug       => undef,
+	debug       => 1,
 	conf_file   => "/etc/NetSDS/smppserver2.conf",
 );
 
@@ -188,7 +189,7 @@ sub initialize {
 
 	if ( $this->{debug} ) { 
 		$this->log("info","Setting USR1 signal handler");
-  	}
+  }
 	
 	$SIG{USR1} = sub {
    		$this->speak("SIGUSR1 caught");
@@ -220,7 +221,16 @@ sub initialize {
 
 	if ( $this->{debug} ) { 
 		$this->log("info","Initialize listener");
-    }
+  }
+	if ( $this->{debug} ) {
+		$this->speak("Initialize MO/DLR selector: $plugoutdb");  
+		$this->speak("Initialize listener.");
+  	}
+
+	# Initialize listening socket and add to select()
+	$this->_init_listener();
+	$this->selector->add( $this->listener );
+>>>>>>> 21f959d0315d1c50327992f8f8b9057f06d39346
 
 	if ( $this->{debug} ) { 
 		$this->log("info","Setting initial array of handlers");
@@ -236,6 +246,10 @@ sub _process_mo_dlr {
 	my $this = shift;
 
 	my $messages = $this->{'plugoutdb'}->_process_mo_dlr($this->{'shm'});
+	if ( $this->{debug} ) { 
+		$this->speak("Process MO-DLR"); 
+	}	
+	my $messages = $this->{'plugoutdb'}->_process_mo_dlr();
 	if ( $messages == 0 ) {
 		return;
 	}
@@ -1011,6 +1025,7 @@ sub cmd_submit_sm {
 		message_id => $message_id,
 		async      => 1,
 	);
+	alarm 1; 
 
 } ## end sub cmd_submit_sm
 
@@ -1207,6 +1222,7 @@ sub cmd_bind_transceiver {
 	my $status = undef;
 
 	if ( $resp_status == 0x00 ) {
+		alarm 2; 
 		$status = 'OK';
 	} else {
 		$status = 'FAIL';
