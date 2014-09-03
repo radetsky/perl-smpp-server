@@ -1,0 +1,1975 @@
+#!/usr/bin/env perl 
+#===============================================================================
+#
+#         FILE:  smppd.pl
+#
+#        USAGE:  ./smppd.pl
+#
+#  DESCRIPTION:  NetSDS SMPP Server 2.2 
+#
+#      OPTIONS:  ---
+# REQUIREMENTS:
+#         BUGS:  ---
+#        NOTES:  ---
+#       AUTHOR:  Michael Bochkaryov (Rattler), <misha@rattler.kiev.ua>
+#       AUTHOR:  Alex Radetsky (rad), <rad@rad.kiev.ua>
+#      COMPANY:  Net.Style
+#      VERSION:  2.1
+#      CREATED:  12.07.2009 15:15:03 UTC
+#     MODIFIED:  21.09.2011   
+#     MODIFIED:  11.07.2014 
+#===============================================================================
+
+use 5.8.0;
+use strict;
+use warnings;
+#use diagnostics -verbose; 
+
+
+SMPPServerV2->run(
+	daemon      => 1,
+	verbose     => 1,
+	use_pidfile => 1,
+	has_conf    => 1,
+	debug       => undef,
+	conf_file   => "/etc/NetSDS/smppserver2.conf",
+);
+
+1;
+
+package SMPPServerV2;
+
+use 5.8.0;
+use strict;
+use warnings;
+
+use lib './lib'; 
+
+use base qw(NetSDS::App::SMPP);
+
+use NetSDS::Util::Convert;
+use NetSDS::Util::SMPPConvert;
+use NetSDS::Util::DateTime;
+use NetSDS::Util::String;
+use NetSDS::Util::Misc;
+use NetSDS::Util::PDUAnalyzer;
+use NetSDS::App::SMSTradeOutDB;
+use NetSDS::App::SMSTradeInDB;
+use IPC::ShareLite qw ( :lock );
+use JSON;
+use DBI;
+use Time::HiRes qw(usleep);
+use Data::Dumper;
+use POSIX qw(floor);
+use Encode;
+use Socket;
+use IO::Handle;
+use POSIX ":sys_wait_h";
+
+# SMPP PDU command_id table
+use constant cmd_tab => {
+	0x80000000 => 'generic_nack',
+	0x00000001 => 'bind_receiver',
+	0x80000001 => 'bind_receiver_resp',
+	0x00000002 => 'bind_transmitter',
+	0x80000002 => 'bind_transmitter_resp',
+	0x00000003 => 'query_sm',
+	0x80000003 => 'query_sm_resp',
+	0x00000004 => 'submit_sm',
+	0x80000004 => 'submit_sm_resp',
+	0x80000005 => 'deliver_sm_resp',
+	0x00000006 => 'unbind',
+	0x80000006 => 'unbind_resp',
+	0x00000007 => 'replace_sm',
+	0x80000007 => 'replace_sm_resp',
+	0x00000008 => 'cancel_sm',
+	0x80000008 => 'cancel_sm_resp',
+	0x00000009 => 'bind_transceiver',
+	0x80000009 => 'bind_transceiver_resp',
+	0x0000000b => 'outbind',
+	0x00000015 => 'enquire_link',
+	0x80000015 => 'enquire_link_resp',
+};
+
+my @CHILDREN           = array();
+my $ESME               = undef;
+my $LOCAL_SYSTEM_ID    = NetSDS::App::SMPP::SYSTEM_NAME;
+my $throttle_timestamp = undef;
+
+sub initialize {
+
+	my ( $this, %params ) = @_;
+
+	$this->speak("[$$] NetSDS SMPPServer v2.1 initializing application.");
+
+    # Determine application name from process name
+	if ( !$this->{name} ) {
+		$this->_determine_name();
+	}
+
+	# Get CLI parameters
+	$this->_get_cli_param();
+
+	if ( $this->{debug} ) { 
+		$this->speak ("[$$] Debug enabled. ");
+	}
+
+    if ( $this->{debug} ) { 
+		$this->speak ("[$$] Reading configuration. ");
+	} 
+
+	# Initialize configuration
+	if ( $this->{has_conf} ) {
+		# Automatically determine configuration file name
+		if ( !$this->{conf_file} ) {
+			$this->{conf_file} = $this->config_file( $this->{name} . ".conf" );
+		}
+		# Get configuration file
+		if ( my $conf = NetSDS::Conf->getconf( $this->{conf_file} ) ) {
+			$this->conf($conf);
+		} else {
+			die( "Can't read configuration file: " . $this->{conf_file} );
+		}
+		# Add automatic features
+		if ( $this->auto_features ) {
+			$this->use_auto_features();
+		}
+	}
+
+	# Daemonize, if needed
+	if ( $this->daemon() ) {
+		if ( $this->{debug} ) { 
+			$this->speak("[$$] Daemonize, switch verbosity to false.");
+		} 
+		$this->{verbose} = undef;
+		Proc::Daemon::Init;
+	}
+
+	# Create syslog handler
+	if ( !$this->logger ) {
+		$this->logger( NetSDS::Logger->new( name => $this->{name} ) );
+		$this->log( "info", "NetSDS SMPPServer v.2.2. Logger started" );
+	}
+
+  	# Get PID filename
+	if ( $this->{debug} ) { 
+		$this->log( "info", "Working with PID file.");
+	} 
+	my $pidfilename = undef; 
+	unless ( defined ( $this->{conf}->{'pidfilename'} ) ) { 
+		$pidfilename = $this->{name}; 
+	} else { 
+		$pidfilename = $this->{conf}->{'pidfilename'}; 
+	} 
+	if ( $this->{debug} ) {
+		$this->log ( "info", "pidfilename = $pidfilename" ); 
+	}
+
+	# Process PID file if necessary
+	if ( $this->use_pidfile ) {
+		if ( Proc::PID::File->running( dir => $this->pid_dir, name => $pidfilename ) ) {
+			$this->log( "error", "Application already running, stop immediately!" );
+			die "Application already running, stop immediately!";
+		}
+	}
+
+	# Update PID if necessary
+	$this->{pid} = $$;
+
+    # Working with ALARM signal because we want to process MO and DLR every second. 
+	if ( $this->{debug} ) { 
+		$this->log("info", "Setting ALRM signal handler");
+	}		
+
+	$SIG{ALRM} = sub {
+		$this->_process_mo_dlr();
+		alarm 1;
+	};
+
+	if ( $this->{debug} ) { 
+		$this->log("info","Setting USR1 signal handler");
+  	}
+	
+	$SIG{USR1} = sub {
+   		$this->speak("SIGUSR1 caught");
+   		$this->log( "info", "SIGUSR1 caught" );
+   		$this->_kick();      # Seek and destroy
+   		$this->_reload();    # Reload users configuration
+	};
+
+	if ( $this->{debug} ) { 
+		$this->log("info","Setting TERM and INT signal handlers.");
+    }
+
+# Версия 2.2 - удаляем использование shared memory 
+#
+#	$SIG{TERM} = sub { 
+#			$this->_remove_shm();
+#	}; 
+#	$SIG{INT} = sub { 
+#			$this->_remove_shm();
+#	}; 
+
+	if ( $this->{debug} ) { 
+		$this->log("info", "Initialize shared memory.");
+    }
+
+	# Initialize SHM area
+	my $shm_key = $this->_init_shm();
+
+	if ( $this->{debug} ) { 
+		$this->log("info", "Save got segment number $shm_key to file.");
+    }
+
+    # Save SHM key
+    $this->{conf}->{'shm'}->{'segment'} = $shm_key; 
+
+    # Write SHM key to file 
+    $this->_save_shm_key($shm_key); 
+	if ( $this->{debug} ) { 
+		$this->log("info", "Initialize EDR subsystem");
+    }
+	# Initialize Event Data Recording subsystem
+	$this->_edr_init();
+
+	if ( $this->{debug} ) { 
+		$this->log("info", "Create select() handler");
+    }
+	# Create select() handler for incoming events
+	$this->selector( IO::Select->new() );
+
+	if ( $this->{debug} ) { 
+		$this->log("info", "Initialize input queue plugin");
+    }
+	# Initialize queue for incoming (MT) events
+	my $plugindb = NetSDS::App::SMSTradeInDB->new( $this->{conf} );
+	$this->{'plugindb'} = $plugindb;
+
+	if ( $this->{debug} ) { 
+		$this->log("info","Initialize output queue plugin");
+    }
+
+	# Initialize MO/DLR selector
+	my $plugoutdb = NetSDS::App::SMSTradeOutDB->new( $this->shm, $this->{conf} );
+	$this->{'plugoutdb'} = $plugoutdb;
+
+	if ( $this->{debug} ) { 
+		$this->log("info","Initialize listener");
+    }
+
+	# Initialize listening socket and add to select()
+	$this->_init_listener();
+	$this->selector->add( $this->listener );
+
+	if ( $this->{debug} ) { 
+		$this->log("info","Setting initial array of handlers");
+    }
+
+	# Set initial empty array of handlers hashref
+	$this->handlers( {} );
+
+} ## end sub initialize
+
+sub _process_mo_dlr {
+	my $this = shift;
+
+	my $messages = $this->{'plugoutdb'}->_process_mo_dlr();
+	if ( $messages == 0 ) {
+		return;
+	}
+
+	foreach my $somekey ( keys %$messages ) {
+		my $queue_msg = $messages->{$somekey};
+		my $delivered = $this->_process_out_message($queue_msg);
+		if ( defined($delivered) ) {
+			$this->{'plugoutdb'}->_delete_mo( $queue_msg->{'internal_id'} );    #delete if ok
+		}
+	}
+}
+
+sub _edr_init {
+	my $this = shift;
+	# Initialize EDR writer
+
+	if ( defined( $this->{conf}->{'edr'}->{'type'} ) ) {
+		my $edr_type = $this->{conf}->{'edr'}->{'type'};
+		if ( $edr_type =~ /database/i ) {
+			my $edr = NetSDS::EDR->new(
+				type     => 'database',
+				dsn      => $this->{conf}->{'edr'}->{'dsn'},
+				user     => $this->{conf}->{'edr'}->{'db-user'},
+				password => $this->{conf}->{'edr'}->{'db-password'},
+				query    => $this->{conf}->{'edr'}->{'query'}
+			);
+			unless ( defined($edr) ) {
+				warn Dumper($edr);
+				warn Dumper( $this->{conf}->{'edr'} );
+				die "Can't init EDR";
+			}
+			$this->{edr_writer} = $edr;
+			$this->{'edr_mapping'} = $this->{conf}->{'edr'}->{'mapping'};
+			$this->log( "info", "EDR database writer started." );
+
+		}
+		if ( $edr_type =~ /rawfile/i ) {
+			$this->{edr_writer} = NetSDS::EDR->new(
+				type     => $edr_type,
+				filename => $this->{conf}->{'edr'}->{'filename'}
+			);
+			$this->log( "info", "EDR rawfile writer started." );
+		}
+		if ( $edr_type =~ /syslog/i ) {
+			$this->{edr_writer} = NetSDS::EDR->new(
+				type   => $edr_type,
+				prefix => $this->{conf}->{'edr'}->{'prefix'}
+			);
+			$this->log( "info", "EDR syslog writer started" );
+		}
+
+	} ## end if ( defined( $this->{...
+} ## end sub _edr_init
+
+sub _edr_write {
+	my $this   = shift;
+	my $record = shift;
+	my $params = $this->{'edr_mapping'};
+
+	if ( defined( $this->{edr_writer} ) ) {
+		$this->{edr_writer}->write( $record, $params );
+	}
+
+}
+
+sub start {
+
+	my ($this) = @_;
+
+	$this->speak("[$$] Start SMPPServer v2.2 ");
+	$this->_edr_write( { event_name => 'Start Server' } );
+
+	# Connect to authentication DBMS
+	$this->mk_accessors('authdbh');
+	$this->_connect_db;
+
+
+	# Версия 2.2 - удаляем использование shared memory 
+
+
+	# Do you understand what written here ? Yes:No;
+	# my $my_local_data = defined( $this->conf->{'shm'}->{'magickey'} ) ? $this->conf->{'shm'}->{'magickey'} : 'My L0c4l D4t4';
+	# $this->{'magickey'} = $my_local_data; # Save for children.  
+	# $this->shm->lock(LOCK_EX);
+	# my $list = decode_json( $this->shm->fetch );
+	# $list->{$my_local_data}->{'start_timestamp'} = time;
+	# $this->shm->store( encode_json($list) );
+	# $this->shm->unlock;
+
+	$this->{'shm'} = undef; # Теперь тут мы будем хранить то, что раньше было в shm. 
+
+	# Fill the Local-system-id value
+	if ( defined( $this->conf->{'smpp'}->{'local_system_id'} ) ) {
+		$LOCAL_SYSTEM_ID = $this->conf->{'smpp'}->{'local_system_id'};
+	}
+
+	alarm 1;
+} ## end sub start
+
+sub _auth_esme {
+
+	my ( $this, $login, $passwd, $addr_port ) = @_;
+
+	# Loggin' begin auth procedure
+	$this->log( "info", "Begin authentication for \"$login\"" );
+	$this->speak("[$$] Begin authentication for \"$login\"");
+
+	# Check DBMS connection and do reconnect if necessary
+	unless ( defined( $this->_connect_db() ) ) {
+		return undef;
+	}
+
+	# Check config
+	unless ( defined( $this->conf->{auth}->{query} ) ) {
+		$this->log( "warning", "Undefined main query in auth section of config." );
+		return undef;
+	}
+
+	unless ( defined( $this->conf->{auth}->{query_system_id} ) ) {
+		$this->log( "warning", "Undefined query_system_id in auth section of config." );
+		return undef;
+	}
+
+	# First of all try to get information with full information like login and password
+	# Execute SQL query (should be present in configuration file)
+	my $sth = $this->authdbh->prepare( $this->conf->{auth}->{query} );
+	my $rv = $sth->execute( $login, $passwd );
+	unless ( defined($rv) ) {
+		# Execute returns error. Try to reconnect.
+		$this->log( "warning", "Can't execute SQL" . $this->conf->{auth}->{query} . " Trying to reconnect. " );
+		$this->_connect_db();
+		$sth = $this->authdbh->prepare( $this->conf->{auth}->{query} );
+		$rv = $sth->execute( $login, $passwd );
+		unless ( defined($rv) ) {
+			return undef;
+		}
+	}
+
+	# Try to get one row or return undef
+	if ( my $res = $sth->fetchrow_hashref() ) {
+
+		my $system_id = $res->{'system_id'};
+		unless ( defined( $ESME->{$system_id} ) ) {
+			# if this record does not exist in hasref ESME
+			$ESME->{$system_id} = $res;    # add it
+		}
+
+		unless ( defined( $ESME->{$system_id}->{'already_connected'} ) ) {    # no connections ?
+			$this->log( "info", "Setting already_connected to 0" );
+			$ESME->{$system_id}->{'already_connected'} = 0;
+		}
+
+		# if database does not contain max_connections for ESME, default value = 1
+		unless ( defined( $res->{'max_connections'} ) ) {
+			$ESME->{$system_id}->{'max_connections'} = 1;
+			$this->log( "warning", "Max_connections for " . $system_id . " is NULL. Default value set to 1. " );
+		} else {
+			$ESME->{$system_id}->{'max_connections'} = $res->{'max_connections'};
+		}
+
+		# if database does not contain allowed_ip, set default to 0.0.0.0
+		unless ( defined( $res->{'allowed_ip'} ) ) {
+			$ESME->{$system_id}->{'allowed_ip'} = '0.0.0.0';
+			$this->log( "warning", "Allowed src ip for " . $system_id . " is NULL. Default value set to 0.0.0.0 " );
+		} else {
+			$ESME->{$system_id}->{'allowed_ip'} = $res->{'allowed_ip'};
+		}
+
+		unless ( defined( $res->{'bandwidth'} ) ) {
+			$ESME->{$system_id}->{'bandwidth'} = 1;
+			$this->log( "warning", "Setting bandwidth for $system_id to 1/s" );
+		} else {
+			$ESME->{$system_id}->{'bandwidth'} = $res->{'bandwidth'};
+		}
+
+		unless ( defined( $ESME->{$system_id}->{'received'} ) ) {
+			$ESME->{$system_id}->{'received'} = 0;
+		}
+
+		unless ( defined( $ESME->{$system_id}->{'sent'} ) ) {
+			$ESME->{$system_id}->{'sent'} = 0;
+		}
+
+		$this->_edr_write(
+			{
+				event_name    => 'Authentication',
+				system_id     => $system_id,
+				Status        => 'OK',
+				cmd_status    => 0x0,
+				src_addr_port => $addr_port,
+			}
+		);
+
+		return 1;
+
+	} else {
+
+		# Try to find just system_id.
+
+		my $sth = $this->authdbh->prepare( $this->conf->{auth}->{query_system_id} );
+		my $rv  = $sth->execute($login);
+		unless ( defined($rv) ) {
+			$this->log( "warning", "Can't execute SQL " . $this->conf->{auth}->{query_system_id} . ". Trying to reconnect." );
+			$this->_connect_db();
+			$sth = $this->authdbh->prepare( $this->conf->{auth}->{query_system_id} );
+			$rv  = $sth->execute($login);
+			unless ( defined($rv) ) {
+				return undef;
+			}
+		}
+
+		# Try to get one row or return undef
+		if ( my $res = $sth->fetchrow_hashref() ) {
+			# If found - then password incorrect
+			# else - system incorrect
+			$this->_edr_write(
+				{
+					event_name    => 'Authentication',
+					system_id     => $login,
+					Status        => 'FAIL',
+					src_addr_port => $addr_port,
+					cmd_status    => 0x0E,
+				}
+			);
+		} else {
+			$this->_edr_write(
+				{
+					event_name    => 'Authentication',
+					system_id     => $login,
+					Status        => 'FAIL',
+					src_addr_port => $addr_port,
+					cmd_status    => 0x0F,
+				}
+			);
+		}
+		return undef;
+
+	} ## end else [ if ( my $res = $sth->fetchrow_hashref...
+} ## end sub _auth_esme
+
+=item B<_increase_received> 
+
+Increase received messages value 
+
+=cut 
+
+sub _increase_received {
+	my ( $this, $connect_id ) = @_;
+
+	my $list = $this->{'shm'};
+	unless ( defined( $list->{$connect_id}->{'received'} ) ) {
+		$list->{$connect_id}->{'received'} = 1;
+	} else {
+		$list->{$connect_id}->{'received'} = $list->{$connect_id}->{'received'} + 1;
+	}
+	$this->{'shm'} = $list;
+
+	my $login = $list->{$connect_id}->{'login'};
+	$ESME->{$login}->{'received'} = $ESME->{$login}->{'received'} + 1;
+
+}
+
+=item B<_increase_sent> 
+
+Increase sent messages value 
+
+=cut 
+
+sub _increase_sent {
+	my ( $this, $connect_id ) = @_;
+
+	my $list = $this->{'shm'}; 
+	unless ( defined( $list->{$connect_id}->{'sent'} ) ) {
+		$list->{$connect_id}->{'sent'} = 1;
+	} else {
+		$list->{$connect_id}->{'sent'} = $list->{$connect_id}->{'sent'} + 1;
+	}
+	$this->{'shm'} = $list; 
+
+	my $login = $list->{$connect_id}->{'login'};
+	$ESME->{$login}->{'sent'} = $ESME->{$login}->{'sent'} + 1;
+
+}
+
+=item B<_increase_already_connected> 
+
+Tries to increase already_connected value for ESME. If it reaches the max_connections will return undef else return 1
+
+=cut 
+
+sub _increase_already_connected {
+	my ( $this, $system_id ) = @_;
+
+	my $new_connection_num = $ESME->{$system_id}->{'already_connected'} + 1;
+	if ( $new_connection_num > $ESME->{$system_id}->{'max_connections'} ) {
+		$this->log( "warning", "ESME \"$system_id\" reached maximum of connections. " );
+		return undef;    # Do not authorize.
+
+	}
+
+	$ESME->{$system_id}->{'already_connected'} = $ESME->{$system_id}->{'already_connected'} + 1;
+	my $list = $this->{'shm'}; 
+
+	foreach my $connect_id ( keys %$list ) {
+		if ( defined( $list->{$connect_id}->{'login'} ) ) {
+			if ( $system_id eq $list->{$connect_id}->{'login'} ) {
+				$list->{$connect_id}->{'already_connected'} = $ESME->{$system_id}->{'already_connected'};
+			}
+		}
+	}
+	$this->{'shm'} = $list; 
+	$this->log( "info", "ESME \"$system_id\" already connected " . $ESME->{$system_id}->{'already_connected'} . " times" );
+
+	return 1;
+
+} ## end sub _increase_already_connected
+
+=item B<_decrease_already_connected> 
+
+Decrease already connected value.
+
+=cut 
+
+sub _decrease_already_connected {
+
+	my ( $this, $login ) = @_;
+
+	unless ( defined( $ESME->{$login} ) ) {
+		$this->log( "error", "Try to decrease already_connected for unexistent login $login" );
+		return undef;
+	}
+
+	$ESME->{$login}->{'already_connected'} = $ESME->{$login}->{'already_connected'} - 1;
+	if ( $ESME->{$login}->{'already_connected'} < 0 ) {
+		$this->log( "error", "Decreased already_connected for $login < 0!" );
+		$ESME->{$login}->{'already_connected'} = 0;
+		return 1;
+	}
+
+	my $list = $this->{'shm'}; 
+
+	foreach my $connect_id ( keys %$list ) {
+		if ( defined( $list->{$connect_id}->{'login'} ) ) {
+			if ( $login eq $list->{$connect_id}->{'login'} ) {
+				$list->{$connect_id}->{'already_connected'} = $ESME->{$login}->{'already_connected'};
+			}
+		}
+	}
+	$this->{'shm'} = $list; 
+
+	$this->log( "info", "Decrease already_connected for $login to " . $ESME->{$login}->{'already_connected'} );
+	return 1;
+
+} ## end sub _decrease_already_connected
+
+sub _connect_db {
+
+	my ($this) = @_;
+
+	my $dsn    = $this->conf->{'auth'}->{'dsn'};
+	my $user   = $this->conf->{'auth'}->{'db-user'};
+	my $passwd = $this->conf->{'auth'}->{'db-password'};
+
+	# If DBMS isn' t accessible - try reconnect
+	if ( !$this->authdbh or !$this->authdbh->ping ) {
+		$this->authdbh( DBI->connect_cached( $dsn, $user, $passwd, { RaiseError => 1 } ) );
+	}
+
+	if ( !$this->authdbh ) {
+		$this->speak("Cant connect to DBMS!");
+		$this->log( "error", "Cant connect to DBMS!" );
+		return undef;
+	}
+
+	$this->log( "warning", "DB Connected!" );
+	return 1;
+
+} ## end sub _connect_db
+
+sub _disconnect_db {
+	my $this = shift;
+	$this->authdbh->disconnect;
+	$this->authdbh(undef);
+}
+
+=itemB<_authorize_submit> 
+
+Checks for allowed_src 
+
+=cut 
+
+sub _authorize_submit {
+
+	my ( $this, $pdu, $hdl ) = @_;
+
+	my $login = $hdl->{system_id};
+	my $src   = $pdu->{source_addr};
+
+	unless ( defined( $ESME->{$login}->{'allowed_src'} ) ) {
+		# NULL in database
+		return 1;
+	}
+	my @allowed_src = split( ',', $ESME->{$login}->{'allowed_src'} );
+
+	foreach my $source (@allowed_src) {
+		$source = str_trim($source);
+		if ( $source eq $src ) {
+			return 1;
+		}
+	}
+	$this->_edr_write(
+		{
+			event_name    => 'cmd_submit_sm',
+			system_id     => $login,
+			Status        => 'FAIL',
+			Cause         => 'Invalid source',
+			src_addr_port => $src,
+		}
+	);
+
+	$this->log( "warning", "Deny send SMS from '$src' for '$login'" );
+
+	return undef;
+} ## end sub _authorize_submit
+
+sub _find_current_bandwidth_k {
+
+	my ( $this, $login ) = @_;
+
+	# Find sum of bandwidth of all connected users;
+	my $s = 0;
+	foreach my $system_id ( keys %$ESME ) {
+		$s = $s + $ESME->{$system_id}->{'bandwidth'};
+	}
+	unless ( defined( $this->{conf}->{'throttle'}->{'bandwidth'} ) ) {
+		return 1;    # global throttling not defined. Using unlimited.
+	}
+	my $global_band = $this->{conf}->{'throttle'}->{'bandwidth'};
+	my $user_band   = $ESME->{$login}->{'bandwidth'};
+
+	my $k = floor( $user_band * $global_band ) / $s;
+
+	# Коэффициент глобального ограничения есть ( пользовательское ограничение * глобальное ) / ( сумму всех ограничение всех подключенных пользователей ) . Доказано RAD.
+
+	return $k;
+
+} ## end sub _find_current_bandwidth_k
+
+=item B<_throttling> 
+
+Check for count SMS in seconds 
+
+=cut 
+
+sub _throttling {
+
+	my ( $this, $login ) = @_;
+	my $new_message_timestamp = time();
+
+	# If last_message_timestamp does not exist, accept;
+	unless ( defined( $ESME->{$login}->{'last_message_timestamp'} ) ) {
+		$ESME->{$login}->{'last_message_timestamp'} = time();
+		return 1;
+	}
+
+	my $last_message_timestamp = $ESME->{$login}->{'last_message_timestamp'};
+	my $difference             = $new_message_timestamp - $last_message_timestamp;
+
+	if ( $difference > 0 ) {
+		$ESME->{$login}->{'last_message_timestamp'}  = $new_message_timestamp;
+		$ESME->{$login}->{'last_second_sm_received'} = 1;
+		return 1;    # accept
+	}
+
+	if ( $difference < 0 ) {
+		$ESME->{$login}->{'last_message_timestamp'}  = $new_message_timestamp;
+		$ESME->{$login}->{'last_second_sm_received'} = 1;
+		return 1;    # It's stupid error; accept;
+	}
+
+	# If difference  == 0; Count messages that was received while current timestamp
+	unless ( defined( $ESME->{$login}->{'last_second_sm_received'} ) ) {
+		$ESME->{$login}->{'last_second_sm_received'} = 0;
+	}
+	$ESME->{$login}->{'last_second_sm_received'} = $ESME->{$login}->{'last_second_sm_received'} + 1;
+
+	# Local user bandwidth check
+	if ( ( $ESME->{$login}->{'last_second_sm_received'} ) > $ESME->{$login}->{'bandwidth'} ) {
+		return undef;    # Deny
+	}
+
+	my $k = 1000;
+
+	# Caching global throttling check
+	unless ( defined($throttle_timestamp) ) {
+		$throttle_timestamp = time();
+		$k                  = $this->_find_current_bandwidth_k($login);
+	}
+	$difference = $new_message_timestamp - $throttle_timestamp;
+
+	if ( $difference > 60 ) {
+		$k                  = $this->_find_current_bandwidth_k($login);
+		$throttle_timestamp = $new_message_timestamp;
+	}
+
+	# Global system bandwidth check
+	if ( ( $ESME->{$login}->{'last_second_sm_received'} + 1 ) > $k ) {
+		$this->log( "warning", "Deny send SMS from $login for GLOBAL THROTTLING reason." );
+		$this->speak("[$$] Deny send SMS from $login for GLOBAL THROTTLING reason.");
+		$this->_edr_write(
+			{
+				event_name => 'Submit',
+				system_id  => $login,
+				Status     => 'FAIL',
+				Reason     => 'GLOBAL THROTTLING'
+			}
+		);
+
+		return undef;
+	}
+
+	return 1;    # accept
+
+} ## end sub _throttling
+
+=item B<cmd_submit_sm> 
+
+We are replaced parent method because we need to sent message to IO::Socket::INET not MemcacheQ. 
+
+=cut 
+
+sub cmd_submit_sm {
+
+	my ( $this, $pdu, $hdl ) = @_;
+
+	my %COD_NAME = (
+		0 => 'gsm0338',
+		1 => '8bit',
+		2 => 'ucs2',
+	);
+
+	my $resp_status = undef;          # response command status
+	my $message_id  = make_uuid();    # message id on CPA (UUID style)
+
+	my $utf8_text = '';               # message text in utf8 charset for EDR
+
+	my $mode = $hdl->{'mode'};
+	
+	# Check if client is authenticated
+	unless ( $hdl->{authenticated} ) {
+		$resp_status = 0x45;
+		goto SUBMIT_SM_RESP;
+	}
+
+	# FIXME - cache authorize
+	my $is_auth = $this->_authorize_submit( $pdu, $hdl );
+	unless ($is_auth) {
+		$resp_status = 0x45;
+		goto SUBMIT_SM_RESP;
+	}
+
+	if ( $mode eq 'receiver' ) {
+		$resp_status = 0x45;
+		goto SUBMIT_SM_RESP;
+	}
+
+	unless ( defined($resp_status) ) {
+		# Throttling ?
+		my $is_throttle = $this->_throttling( $hdl->{system_id} );
+
+		unless ( defined($is_throttle) ) {
+
+			$resp_status = 0x00000058;    # ESME_RTHROTTLED
+
+			$hdl->{smpp}->submit_sm_resp(
+				seq        => $pdu->{seq},
+				status     => $resp_status,
+				message_id => $message_id,
+				async      => 1,
+			);
+			$this->_edr_write(
+				{
+					event_name    => 'cmd_submit_sm',
+					system_id     => $hdl->{system_id},
+					cmd_id        => 0x04,
+					cmd_status    => $resp_status,
+					message_id    => $message_id,
+					seq           => $pdu->{seq},
+					src_addr_port => $hdl->{id}
+				}
+			);
+			goto SUBMIT_SM_RESP;
+
+		} ## end unless ( defined($is_throttle...
+
+		my $date_now = POSIX::strftime( "%Y-%m-%d %H:%M:%S", localtime );    #date_now();
+
+		# Create empty message
+		my $queue_msg = {
+			client   => $hdl->{system_id},
+			created  => $date_now,
+			received => $date_now,
+		};
+
+		unless ( defined( $ESME->{ $hdl->{system_id} } ) ) {
+			$queue_msg->{'esme_id'} = undef;
+
+		} else {
+			$queue_msg->{'esme_id'} = $ESME->{ $hdl->{system_id} }->{'esme_id'};
+		}
+
+		my $mclass = undef;    # default (ME specific according with GSM 03.38)
+
+		# Create UUID for new MT message
+		# $message_id = make_uuid();
+		$queue_msg->{message_id} = $message_id;
+
+		# Get source and destination addresses
+		#	my $src_addr = $pdu->{source_addr};
+		#   my $dst_addr = $pdu->{destination_addr};
+
+		$queue_msg->{src_addr} = $pdu->{source_addr};
+		$queue_msg->{dst_addr} = $pdu->{destination_addr};
+
+		# **************************************************************************
+		#
+		# Process data_coding (see ETSI GSM 03.38 specification)
+		#
+		# Determine: message_class, coding, MWI flags
+		#
+		my $data_coding = $pdu->{data_coding};
+
+		# Check if message_class is present
+		if ( ( $data_coding & 0b00010000 ) eq 0b00010000 ) {
+			$mclass = $data_coding & 0b00000011;
+		}
+
+		$queue_msg->{mclass} = $mclass;
+
+		# Determine coding
+		# Part.1: is this Latin1 (5.2.19 in SMPP v.3.4. spec. 0b00000011)
+		#
+		my $coding = 0;
+		if ( ( $data_coding & 0b00000011 ) eq 0b00000011 ) {
+			$coding = 3;    # Latin1 we are save in Database as 0b0011 ;)
+		} else {
+			$coding = ( $data_coding & 0b00001100 ) >> 2;
+		}
+
+		if ( $coding > 3 ) {
+			$resp_status = 0x45;    # ESME_RSUBMITFAIL
+			$this->log( "warning", "Unknown coding here. '$coding'" );
+			goto SUBMIT_SM_RESP;
+		}
+
+		# Put it to message structure
+		$queue_msg->{coding} = $coding;
+
+		# Determine UDHI state
+		my $udhi      = 0;                    # No UDH by default
+		my $esm_class = $pdu->{esm_class};    # see 5.2.12 part of SMPP 3.4 spec
+		if ( ( $esm_class & 0b01000000 ) eq 0b01000000 ) {
+			$udhi = 1;
+		}
+
+		# **************************************************************************
+		#
+		# Process SM body (UD and UDH)
+		#
+		my $msg_text = $pdu->{short_message};
+		# If have UDH, get if from message
+		my $udh = undef;
+		if ($udhi) {
+			use bytes;
+			my ($udhl) = unpack( "C*", bytes::substr( $msg_text, 0, 1 ) );
+			$udh = bytes::substr( $msg_text, 0, $udhl + 1 );
+			$msg_text = bytes::substr( $msg_text, $udhl + 1 );
+			no bytes;
+			$queue_msg->{udh} = conv_str_hex($udh);
+		}
+
+		# Convert text to UTF-8 for event logging
+		$utf8_text = conv_gsm_utf8( $msg_text, $coding );
+		$utf8_text = decode( 'utf-8', $utf8_text );    # Not byte, only Utf-8.
+
+		# Put User Data (UD) to message structure
+		$queue_msg->{body} = $msg_text;
+
+		# Check if need DLR for message
+		if ( $pdu->{registered_delivery} ) {
+			$queue_msg->{register_delivery} = '1';
+			$this->{'plugindb'}->_put_dl_request($message_id); 
+		}
+
+		# Determine TTL for the message
+		my $validity_period = $pdu->{validity_period};
+		if ( $validity_period =~ /(\d\d)(\d\d)(\d\d)(\d\d)(\d\d)(\d\d)(\d)(\d\d)([\-\+R])/ ) {
+			$queue_msg->{validity} = "20" . $1 . "-" . $2 . "-" . $3 . " " . $4 . ":" . $5 . ":" . $6;
+		}
+
+		# Determine deferred delivery time
+		my $schedule_delivery_time = $pdu->{schedule_delivery_time};
+		if ( $schedule_delivery_time =~ /(\d\d)(\d\d)(\d\d)(\d\d)(\d\d)(\d\d)(\d)(\d\d)([\-\+R])/ ) {
+			$queue_msg->{deferred} = "20" . $1 . "-" . $2 . "-" . $3 . " " . $4 . ":" . $5 . ":" . $6;
+		}
+
+		# Determine priority
+		if ( $pdu->{priority_flag} ) {
+			$queue_msg->{priority} = $pdu->{priority_flag} + 0;
+		}
+
+		my $res = $this->{'plugindb'}->_put_mt($queue_msg);
+		unless ( defined($res) ) {
+			$resp_status = 0x45;
+		} else {
+			$resp_status = 0x00;
+		}
+	} ## end unless ( defined($resp_status...
+
+	SUBMIT_SM_RESP:
+
+	if ( $resp_status != 0x00 ) {
+
+		$this->speak( "[$$] Submit fail from '" . $pdu->{source_addr} . "' to '" . $pdu->{destination_addr} . "' via '" . $hdl->{system_id} . "'" );
+		$this->log( "warning", "Submit fail from '" . $pdu->{source_addr} . "' to '" . $pdu->{destination_addr} . "' via '" . $hdl->{system_id} . "'" );
+
+		$this->_edr_write(
+			{
+				event_name    => 'cmd_submit_sm',
+				system_id     => $hdl->{system_id},
+				Status        => 'FAIL',
+				cmd_id        => 0x04,
+				cmd_status    => $resp_status,
+				message_id    => $message_id,
+				seq           => $pdu->{seq},
+				src           => $pdu->{source_addr},
+				dst           => $pdu->{destination_addr},
+				text          => $utf8_text,
+				src_addr_port => $hdl->{id},
+			}
+		);
+
+	} ## end if ( $resp_status != 0x00)
+	if ( $resp_status == 0x00 ) {
+
+		$this->_edr_write(
+			{
+				event_name    => 'cmd_submit_sm',
+				system_id     => $hdl->{system_id},
+				Status        => 'OK',
+				cmd_id        => 0x04,
+				cmd_status    => $resp_status,
+				message_id    => $message_id,
+				seq           => $pdu->{seq},
+				src           => $pdu->{source_addr},
+				dst           => $pdu->{destination_addr},
+				text          => $utf8_text,
+				src_addr_port => $hdl->{id},
+			}
+		);
+
+		#FIXME: cache this!
+		$this->_increase_received( $hdl->{id} );
+
+	} ## end if ( $resp_status == 0x00)
+
+	# Send response to ESME
+	# Note: we use asynchronous sending to avoid deadlocks
+	$hdl->{smpp}->submit_sm_resp(
+		seq        => $pdu->{seq},
+		status     => $resp_status,
+		message_id => $message_id,
+		async      => 1,
+	);
+
+} ## end sub cmd_submit_sm
+
+sub _send_to_inq {
+	my $this         = shift;
+	my $json_text    = shift;
+	my $input_socket = $this->{socket_in_queue};
+	my $resp_status  = undef;
+
+	my $res = print $input_socket $json_text;
+	if ( !$res ) {
+		$resp_status = 0x45;    # ESME_RSUBMITFAIL
+	}
+
+	my $confirm = <$input_socket>;
+	if ( $confirm =~ /OK/ ) {
+		$resp_status = 0x00;
+	} else {
+		$resp_status = 0x45;
+	}
+
+	return $resp_status;
+} ## end sub _send_to_inq
+
+sub cmd_unbind {
+
+	my ( $this, $pdu, $hdl ) = @_;
+
+	# warn "[$$] ". Dumper ($pdu);
+	my $system_id = $hdl->{system_id};
+
+	my $resp = $hdl->{smpp}->unbind_resp(
+		seq    => $pdu->{seq},
+		status => $pdu->{status},
+	);
+
+	# decrease already connected value for system_id
+	$this->_decrease_already_connected( $hdl->{system_id} );
+
+	delete $this->{'shm'}->{ $hdl->{id} };
+
+	# Remove socket from select()
+	$this->selector->remove( $hdl->{smpp} );
+
+	# Close socket and remove record
+	$hdl->{smpp}->close();
+	delete $this->{handlers}->{ $hdl->{id} };
+
+	$this->_edr_write(
+		{
+			event_name    => 'cmd_unbind',
+			system_id     => $hdl->{system_id},
+			src_addr_port => $hdl->{id},
+			cmd_status    => 0x00,
+			cmd_id        => 0x06,
+		}
+	);
+
+}    # end sub cmd unbind
+
+=item B<_acl_source_ip> 
+
+Check allowed_ip field for peer host src ip. 
+
+=cut 
+
+sub _acl_source_ip {
+
+	my ( $this, $login, $peer ) = @_;
+
+	if ( $ESME->{$login}->{'allowed_ip'} eq '0.0.0.0' ) {
+		$this->log( "warning", "Allowed src ip for $login is anywhere (0.0.0.0). OK." );
+		$this->speak("[$$] Allowed src ip for $login is anywhere (0.0.0.0). OK.");
+		return 1;
+	}
+
+	my ( $peerhost, $peerport ) = split( ':', $peer );
+
+	my (@allowed) = split( ',', $ESME->{$login}->{'allowed_ip'} );
+
+	$this->log( "info", $login . ": peer : '" . $peerhost . "' : allowed : '" . $ESME->{$login}->{'allowed_ip'} . "'" );
+	$this->speak( "[$$] $login: peer : '" . $peerhost . "' : allowed : '" . $ESME->{$login}->{'allowed_ip'} . "'" );
+
+	foreach my $host (@allowed) {
+		$host = str_trim($host);
+		if ( $host eq $peerhost ) {
+			$this->log( "info", $login . " allow from " . $peerhost );
+			$this->speak( "[$$] $login  allow from " . $peerhost );
+			return 1;
+		}
+	}
+	$this->log( "warning", $login . " deny from " . $peerhost );
+	$this->speak("[$$] $login deny from $peerhost");
+
+	return undef;
+
+} ## end sub _acl_source_ip
+
+sub _authorize_esme {
+
+	my ( $this, $login, $hdl ) = @_;
+
+	my $resp_status = 0x00000000;
+
+	unless ( defined( $this->_acl_source_ip( $login, $hdl->{id} ) ) ) {
+		return 0x0000000F;    # ESME_RINVSYSID
+	}
+
+	unless ( defined( $this->_increase_already_connected($login) ) ) {
+		return 0x00000005;    # ESME_RALYBND
+	}
+
+	return 0x00000000;        # OK
+}
+
+#
+# bind_transiever called when ESME connect to us in transiever mode (send and receive SMS in one connection )
+#
+
+sub cmd_bind_transceiver {
+
+	my ( $this, $pdu, $hdl ) = @_;
+
+	# Determine incoming login (system-id) and password
+	my $login  = $pdu->{system_id};
+	my $passwd = $pdu->{password};
+
+	my $resp_status = 0x00000000;    # All OK
+
+	# Send error status if already authenticated
+	if ( $hdl->{authenticated} ) {
+		$this->speak("[$$] Already binded ESME authentication: $login");
+		$this->log( "warning", "Already binded ESME authentication: $login" );
+
+		if ( $this->_increase_already_connected($login) ) {
+			$resp_status = 0x00000005;    # Already in bind state
+		} else {
+			$resp_status = 0x0000000E;    # Do not authorize
+		}
+
+	} else {
+
+		# Authentication. ID contains IP:PORT value
+		if ( $this->_auth_esme( $login, $passwd, $hdl->{'id'} ) ) {
+			$this->log( "info", "ESME '$login' successfully authenticated" );
+			$resp_status = $this->_authorize_esme( $login, $hdl );
+			if ( $resp_status == 0x00 ) {
+
+				# Update handlers
+				$this->{handlers}->{ $hdl->{id} }->{authenticated} = 1;
+				$this->{handlers}->{ $hdl->{id} }->{system_id}     = $login;
+				$this->{handlers}->{ $hdl->{id} }->{mode}          = 'transceiver';
+
+				# Update SHM structure
+				my $list       = $this->{'shm'}; 
+				my $connect_id = $hdl->{id};
+
+				$list->{$connect_id}->{'esme_id'}           = $ESME->{$login}->{'esme_id'};
+				$list->{$connect_id}->{'mode'}              = 'transciever';
+				$list->{$connect_id}->{'bandwidth'}         = $ESME->{$login}->{'bandwidth'};
+				$list->{$connect_id}->{'already_connected'} = $ESME->{$login}->{'already_connected'};
+				$list->{$connect_id}->{'sent'}              = $ESME->{$login}->{'sent'};
+				$list->{$connect_id}->{'received'}          = $ESME->{$login}->{'received'};
+				$list->{$connect_id}->{'login'}             = $login;
+
+				$this->{'shm'} = $list; 
+
+			} ## end if ( $resp_status == 0x00)
+
+		} else {
+			$this->log( "warning", "Cant authenticate ESME: [$login:$passwd]" );
+			$this->speak("Cant authenticate ESME: [$login:$passwd]");
+			$resp_status = 0x0000000E;    # ESME_RINVPASWD
+
+			# Send ESME_RINVPASWD
+			my $resp = $hdl->{smpp}->bind_transceiver_resp(
+				seq       => $pdu->{seq},
+				status    => $resp_status,
+				system_id => $LOCAL_SYSTEM_ID,
+			);
+
+			# Close socket
+			# Remove socket from select()
+			$this->selector->remove( $hdl->{smpp} );
+
+			# Close socket and remove record
+			$hdl->{smpp}->close();
+			#undef $this->{handlers}->{ $hdl->{id} };
+			delete $this->{handlers}->{ $hdl->{id} };
+
+		} ## end else [ if ( $this->_auth_esme...
+	} ## end else [ if ( $hdl->{authenticated...
+
+	my $status = undef;
+
+	if ( $resp_status == 0x00 ) {
+		$status = 'OK';
+	} else {
+		$status = 'FAIL';
+	}
+
+	$this->_edr_write(
+		{
+			event_name    => 'cmd_bind_transciever',
+			system_id     => $login,
+			Status        => $status,
+			cmd_id        => 0x09,
+			cmd_status    => $resp_status,
+			src_addr_port => $hdl->{id},
+		}
+	);
+
+	my $resp = $hdl->{smpp}->bind_transceiver_resp(
+		seq       => $pdu->{seq},
+		status    => $resp_status,       # ESME_ROK
+		system_id => $LOCAL_SYSTEM_ID,
+	);
+
+} ## end sub cmd_bind_transceiver
+
+sub cmd_bind_transmitter {
+
+	my ( $this, $pdu, $hdl ) = @_;
+
+	# Determine incoming login (system-id) and password
+	my $login  = $pdu->{system_id};
+	my $passwd = $pdu->{password};
+
+	my $resp_status = 0x00000000;    # All OK
+
+	# Send error status if already authenticated
+	if ( $hdl->{authenticated} ) {
+
+		$this->log( "warning", "Already binded ESME authentication: $login" );
+		$this->speak("[$$] Already binded ESME authentication: $login");
+		if ( $this->_increase_already_connected($login) ) {
+			$resp_status = 0x00000005;    # Already in bind state
+		} else {
+			$resp_status = 0x0000000E;    # Do not authorize
+		}
+
+	} else {
+
+		# Authentication
+		if ( $this->_auth_esme( $login, $passwd, $hdl->{'id'} ) ) {
+			$this->speak("[$$] ESME '$login' successfully authenticated");
+			$this->log( "info", "ESME '$login' successfully authenticated" );
+			$resp_status = $this->_authorize_esme( $login, $hdl );
+			if ( $resp_status == 0x00 ) {
+
+				# Update handlers
+				$this->{handlers}->{ $hdl->{id} }->{authenticated} = 1;
+				$this->{handlers}->{ $hdl->{id} }->{system_id}     = $login;
+				$this->{handlers}->{ $hdl->{id} }->{mode}          = 'transmitter';
+
+				# Update SHM struture
+				my $list       = $this->{'shm'}; 
+				my $connect_id = $hdl->{id};
+
+				$list->{$connect_id}->{'login'}             = $login;
+				$list->{$connect_id}->{'esme_id'}           = $ESME->{$login}->{'esme_id'};
+				$list->{$connect_id}->{'mode'}              = 'transmitter';
+				$list->{$connect_id}->{'bandwidth'}         = $ESME->{$login}->{'bandwidth'};
+				$list->{$connect_id}->{'already_connected'} = $ESME->{$login}->{'already_connected'};
+				$list->{$connect_id}->{'sent'}              = $ESME->{$login}->{'sent'};
+				$list->{$connect_id}->{'received'}          = $ESME->{$login}->{'received'};
+
+				$this->{'shm'} = $list;
+
+			} ## end if ( $resp_status == 0x00)
+
+		} else {
+			$this->log( "warning", "Cant authenticate ESME: [$login:$passwd]" );
+			$this->speak("Cant authenticate ESME: [$login:$passwd]");
+			$resp_status = 0x0000000E;    # ESME_RINVPASWD
+			my $resp = $hdl->{smpp}->bind_transmitter_resp(
+				seq       => $pdu->{seq},
+				status    => $resp_status,       # ESME_RINVPASWD
+				system_id => $LOCAL_SYSTEM_ID,
+			);
+			# Close socket
+			# Remove socket from select()
+			$this->selector->remove( $hdl->{smpp} );
+
+			# Close socket and remove record
+			$hdl->{smpp}->close();
+			delete $this->{handlers}->{ $hdl->{id} };
+			# undef $this->{handlers}->{ $hdl->{id} };
+
+		}
+	} ## end else [ if ( $hdl->{authenticated...
+
+	my $status = undef;
+	if ( $resp_status == 0x00 ) {
+		$status = 'OK';
+	} else {
+		$status = 'FAIL';
+	}
+	$this->_edr_write(
+		{
+			event_name    => 'cmd_bind_transmitter',
+			system_id     => $login,
+			Status        => $status,
+			cmd_id        => 0x02,
+			cmd_status    => $resp_status,
+			src_addr_port => $hdl->{id},
+
+		}
+	);
+
+	my $resp = $hdl->{smpp}->bind_transmitter_resp(
+		seq       => $pdu->{seq},
+		status    => $resp_status,       # ESME_ROK
+		system_id => $LOCAL_SYSTEM_ID,
+	);
+
+} ## end sub cmd_bind_transmitter
+
+sub cmd_bind_receiver {
+
+	my ( $this, $pdu, $hdl ) = @_;
+
+	# Determine incoming login (system-id) and password
+	my $login  = $pdu->{system_id};
+	my $passwd = $pdu->{password};
+
+	my $resp_status = 0x00000000;    # All OK
+
+	# Send error status if already authenticated
+	if ( $hdl->{authenticated} ) {
+
+		$this->log( "warning", "Already binded ESME authentication: $login" );
+		if ( $this->_increase_already_connected($login) ) {
+			$resp_status = 0x00000005;    # Already in bind state
+		} else {
+			$resp_status = 0x0000000E;    # Do not authorize
+		}
+
+	} else {
+
+		# Authentication
+		if ( $this->_auth_esme( $login, $passwd, $hdl->{'id'} ) ) {
+			$this->speak("ESME '$login' successfully authenticated");
+			$this->log( "info", "ESME '$login' successfully authenticated" );
+			$resp_status = $this->_authorize_esme( $login, $hdl );
+			if ( $resp_status == 0x00 ) {
+
+				# Update handlers
+				$this->{handlers}->{ $hdl->{id} }->{authenticated} = 1;
+				$this->{handlers}->{ $hdl->{id} }->{system_id}     = $login;
+				$this->{handlers}->{ $hdl->{id} }->{mode}          = 'receiver';
+
+				# Update SHM struture
+				my $list       = $this->{'shm'}; 
+				my $connect_id = $hdl->{id};
+
+				$list->{$connect_id}->{'login'}             = $login;
+				$list->{$connect_id}->{'esme_id'}           = $ESME->{$login}->{'esme_id'};
+				$list->{$connect_id}->{'mode'}              = 'receiver';
+				$list->{$connect_id}->{'bandwidth'}         = $ESME->{$login}->{'bandwidth'};
+				$list->{$connect_id}->{'already_connected'} = $ESME->{$login}->{'already_connected'};
+				$list->{$connect_id}->{'sent'}              = $ESME->{$login}->{'sent'};
+				$list->{$connect_id}->{'received'}          = $ESME->{$login}->{'received'};
+
+				$this->{'shm'} = $list; 
+
+			} ## end if ( $resp_status == 0x00)
+
+		} else {
+			$this->log( "warning", "Cant authenticate ESME: [$login:$passwd]" );
+			$this->speak("Cant authenticate ESME: [$login:$passwd]");
+			$resp_status = 0x0000000E;    # ESME_RINVPASWD
+
+			my $resp = $hdl->{smpp}->bind_receiver_resp(
+				seq       => $pdu->{seq},
+				status    => $resp_status,       # ESME_RINVPASWD
+				system_id => $LOCAL_SYSTEM_ID,
+			);
+
+			# Close socket
+			# Remove socket from select()
+			$this->selector->remove( $hdl->{smpp} );
+
+			# Close socket and remove record
+			$hdl->{smpp}->close();
+			#undef $this->{handlers}->{ $hdl->{id} };
+			delete $this->{handlers}->{ $hdl->{id} };
+
+		} ## end else [ if ( $this->_auth_esme...
+	} ## end else [ if ( $hdl->{authenticated...
+
+	my $status = undef;
+	if ( $resp_status == 0x00 ) {
+		$status = 'OK';
+	} else {
+		$status = 'FAIL';
+	}
+	$this->_edr_write(
+		{
+			event_name    => 'cmd_bind_receiver',
+			system_id     => $login,
+			Status        => $status,
+			cmd_id        => 0x01,
+			cmd_status    => $resp_status,
+			src_addr_port => $hdl->{id},
+		}
+	);
+
+	my $resp = $hdl->{smpp}->bind_receiver_resp(
+		seq       => $pdu->{seq},
+		status    => $resp_status,       # ESME_ROK
+		system_id => $LOCAL_SYSTEM_ID,
+	);
+
+} ## end sub cmd_bind_receiver
+
+sub _process_out_message {
+	my ( $this, $mo ) = @_;
+
+	if ( $this->{debug} ) { 
+			$this->log( "info", "got SM from OutQ:" . Dumper($mo) ); 
+	}
+	
+	$this->log( "info", "got MO/DLR from OutQ for ESME_ID: " . $mo->{'esme_id'} );
+
+	# Check if exist in MO esme_id
+	unless ( defined( $mo->{'esme_id'} ) ) {
+		$this->speak("[$$] MO with empty esme_id");
+		$this->log( "warning", "MO with empty esme_id" );
+	} else {
+		# esme_id is not empty, searching system_id and socket
+		foreach my $esme ( keys %$ESME ) {
+			unless ( defined( $ESME->{$esme}->{'esme_id'} ) ) { next; }
+			if ( $ESME->{$esme}->{'esme_id'} eq $mo->{'esme_id'} ) {
+				$mo->{'system_id'} = $esme;
+				last;
+			}
+		}
+		unless ( defined( $mo->{'system_id'} ) ) {
+			# ESME was not connected from server start.
+			# Information about it not found in our memory.
+			# Situation: Not connected. Return ERROR.
+			$this->log( "info", "ESME with ID # " . $mo->{'esme_id'} . " was not connected yet." );
+			return undef;
+
+		}
+		# Looking for proper ESME connect
+		my $esme_connect_found = 0;
+		my @esme_connects      = ();
+
+		foreach my $hdl ( values %{ $this->handlers } ) {
+			unless ( defined( $hdl->{system_id} ) ) { next; }
+			if ( $hdl->{system_id} eq $mo->{'system_id'} ) {
+				if ( ( $hdl->{mode} eq 'transceiver' ) or ( $hdl->{mode} eq 'receiver' ) ) {
+					# Found connect. Push IT.
+					push @esme_connects, $hdl;
+					$esme_connect_found = $esme_connect_found + 1;
+				}
+			}
+		}
+
+		if ( $esme_connect_found <= 0 ) {
+			$this->log( "warning", "ESME " . $mo->{'system_id'} . "not found in active list. " );
+			return undef;
+		} else {
+			my $hdl_index = rand($esme_connect_found);    # Select random connect
+			my $hdl       = $esme_connects[$hdl_index];
+			$this->log( "info", "Sending SM to '" . $hdl->{system_id} . "'" );
+			my $dlvrd = $this->_deliver_sm( $hdl, $mo );    # send deliver_sm to ESME
+			return $dlvrd;
+		}
+
+	} ## end else
+
+} ## end sub _process_out_message
+
+sub _deliver_sm {
+
+	my ( $this, $hdl, $mo ) = @_;
+
+	if ( $mo->{id} ) {
+
+		# Set default parameters (for MO SM)
+		my $message_id       = $mo->{id};
+		my $esm_class        = $mo->{mclass};
+		my $source_addr_ton  = 0x01;
+		my $source_addr_npi  = 0x01;
+		my $source_addr      = $mo->{src_addr};
+		my $dest_addr_ton    = 0x00;
+		my $dest_addr_npi    = 0x01;
+		my $destination_addr = $mo->{dst_addr};
+		my $msg_text         = $mo->{text};
+
+		# Check registered_delivery if DLR 
+		
+		if ( defined ( $this->{conf}->{'in_queue'}->{'check_delivery_requests'} ) ) { 
+			if ( ( $esm_class == 4 ) and ( defined  ( $mo->{receipted_message_id} ) ) ) {
+				unless ( defined ( $this->{'plugindb'}->_get_dl_request ( $mo->{receipted_message_id} ) ) ) { 
+					$this->log('warning','Delete DLR with message_id='.$message_id.' because registered_delivery was not found. ');  
+					$this->{'plugoutdb'}->_delete_mo($mo->{'internal_id'}); 
+				}	
+			}
+		}
+
+		# Set right data_coding field.
+		my $data_coding = $mo->{coding};
+		if ( $data_coding < 3 ) {
+			$data_coding = ( $data_coding << 2 ) & 0b00001100;
+		}
+
+		my $system_id = $hdl->{system_id};
+		$this->log( "info", "Deliver SM from '$source_addr' to '$destination_addr' via '$system_id'" );
+		$this->log( "info", "MO Dump: " . Dumper($mo) );
+
+		# Send deliver_sm
+		if (    ( $esm_class == 4 )
+			and ( defined( $mo->{message_state} ) )
+			and ( defined( $mo->{receipted_message_id} ) ) )
+		{
+			# DLR
+			$hdl->{smpp}->deliver_sm(
+				source_addr_ton      => $source_addr_ton,             # International (MSISDN)
+				source_addr_npi      => $source_addr_npi,             # E.164
+				source_addr          => $source_addr,
+				dest_addr_ton        => $dest_addr_ton,               # Unknown (default)
+				dest_addr_npi        => $dest_addr_npi,               # E.164
+				destination_addr     => $destination_addr,
+				esm_class            => $esm_class,                   # MO data (UDH + UD) or DLR
+				short_message        => $msg_text,
+				async                => 1,
+				data_coding          => $data_coding,
+				message_state        => $mo->{message_state},
+				receipted_message_id => $mo->{receipted_message_id}
+			);
+		} else {
+			# MO
+			$hdl->{smpp}->deliver_sm(
+				source_addr_ton  => $source_addr_ton,                 # International (MSISDN)
+				source_addr_npi  => $source_addr_npi,                 # E.164
+				source_addr      => $source_addr,
+				dest_addr_ton    => $dest_addr_ton,                   # Unknown (default)
+				dest_addr_npi    => $dest_addr_npi,                   # E.164
+				destination_addr => $destination_addr,
+				esm_class        => $esm_class,                       # MO data (UDH + UD) or DLR
+				short_message    => $msg_text,
+				async            => 1,
+				data_coding      => $data_coding,
+			);
+
+		}
+
+		$hdl->{out_seq}++;
+		$this->_edr_write(
+			{
+				event_name    => 'cmd_deliver_sm',
+				cmd_id        => 0x05,
+				cmd_status    => 0x00,
+				system_id     => $hdl->{system_id},
+				Status        => 'OK',
+				src_addr_port => $hdl->{id},
+				src           => $source_addr,
+				dst           => $destination_addr,
+				text          => $msg_text,
+				message_id    => $mo->{id},
+			}
+		);
+
+		$this->_increase_sent( $hdl->{id} );
+		return 1;
+	} ## end if ( $mo->{id} )
+
+	$this->log( "warning", "MO/DLR does not have Message-ID." );
+	$this->log( "info",    Dumper($mo) );
+
+	return undef;
+
+} ## end sub _deliver_sm
+
+sub _process_socket {
+	my ( $this, $hdl ) = @_;
+
+	# Determine peer IP and port
+	my $peer_addr = $hdl->{smpp}->peerhost;
+	my $peer_port = $hdl->{smpp}->peerport;
+
+	# Try to read PDU
+	my $pdu = $hdl->{smpp}->read_pdu();
+	unless ( defined($pdu) ) {
+		# Disconnect if error while reading the PDU
+		$this->speak("[$$] Error while reading the PDU from $peer_addr : $peer_port");
+		$this->log( "warning", "Error while reading the PDU from $peer_addr : $peer_port" );
+		if ( $hdl->{system_id} ) {
+			$this->_decrease_already_connected( $hdl->{system_id} );
+		}
+		# Remove socket from select()
+		$this->selector->remove( $hdl->{smpp} );
+		# Close socket and remove record
+		$hdl->{smpp}->close();
+		delete $this->{handlers}->{ $hdl->{id} };
+		
+		my $login = $hdl->{system_id};
+		delete $this->{'shm'}->{ $hdl->{id} };
+		
+		$this->speak("[$$] Socket for $peer_addr : $peer_port closed.");
+		$this->log("info","Socket for $peer_addr : $peer_port closed.");
+
+    return undef; 
+	} ## end unless ( defined($pdu) )
+
+	if ( !$pdu ) {
+
+		# Disconnect if EOF
+		if ( $hdl->{smpp}->eof() ) {
+
+			$this->speak("[$$] EOF from $peer_addr : $peer_port ");
+			$this->log( "warning", "EOF from $peer_addr : $peer_port" );
+
+			if ( $hdl->{system_id} ) {
+				$this->_decrease_already_connected( $hdl->{system_id} );
+			}
+
+			# Remove socket from select()
+			$this->selector->remove( $hdl->{smpp} );
+
+			# Close socket and remove record
+			$hdl->{smpp}->close();
+			delete $this->{handlers}->{ $hdl->{id} };
+
+			my $login = $hdl->{system_id};
+			
+			delete $this->{'shm'}->{ $hdl->{id} };
+
+			
+			$this->speak("[$$] Socket for $peer_addr : $peer_port closed.");
+			$this->log("info","Socket for $peer_addr : $peer_port closed.");
+
+		} else {
+			$this->speak("[$$] Incoming event arrived but no SMPP PDU!");
+			$this->log( "warning", "Incoming event arrived from [${peer_addr}:${peer_port}] but no SMPP PDU!" );
+		}
+
+	} else {
+
+		# Process incoming PDU
+		my $pdu_cmd = "unknown";
+		if ( cmd_tab->{ $pdu->{cmd} } ) {
+			$pdu_cmd = cmd_tab->{ $pdu->{cmd} };
+		}
+
+		if ($this->{debug} ) { 
+			$this->log("info", "PDU arrived: " . Dumper ( $pdu ) );
+		}
+		# Determine method name to dispatch PDU call
+		my $method_name = "cmd_" . $pdu_cmd;
+
+		if ( $pdu_cmd eq 'enquire_link' ) {
+
+			# process enqiure_link locally
+			$this->_trace_esme ( $pdu, $hdl, $pdu->{cmd} );
+			$this->cmd_enquire_link( $pdu, $hdl );
+
+		} elsif ( ( $pdu_cmd =~ /^bind_(transceiver|transmitter|receiver)/ ) and $this->can($method_name) ) {
+
+			# Process known authentication methods
+			$this->_trace_esme ( $pdu, $hdl, $pdu->{cmd} ); 
+			$this->$method_name( $pdu, $hdl );
+
+		} elsif ( $this->can($method_name) and $hdl->{authenticated} ) {
+
+			# process known PDUs
+			$this->_trace_esme ( $pdu, $hdl, $pdu->{cmd}); 
+			$this->$method_name( $pdu, $hdl );
+
+		} else {
+
+			# PDU unknown - damn it
+			$this->_trace_esme ( $pdu, $hdl, $pdu->{cmd} ); 
+			$this->cmd_unknown( $pdu, $hdl );
+
+		}
+
+	} ## end else [ if ( !$pdu )
+
+} ## end sub _process_socket
+
+=item B<cmd_unknown> 
+
+Method for unknown PDU.  
+
+=cut 
+
+sub cmd_unknown {
+
+	my ( $this, $pdu, $hdl ) = @_;
+
+	$this->speak( " [$$] Unknown PDU arrived from " . $hdl->{id} );
+	$this->log( "warning", "Unknown PDU received from ". $hdl->{id}." , sending generic_nack" );
+
+
+	my $resp = $hdl->{smpp}->generic_nack(
+		seq    => $pdu->{seq},
+		status => 0x00000003,    # ESME_RINVCMDID
+	);
+
+	$this->_trace_resp( $hdl, 
+		{  
+			seq    => $pdu->{seq},
+			status => 0x00000003, 
+		} 
+	);
+
+
+}
+
+=item B<cmd_generic_nack> 
+
+When got generic_nack PDU ignore it, but log event about it.  
+
+=cut 
+
+sub cmd_generic_nack {
+
+	my ( $this, $pdu, $hdl ) = @_;
+
+
+	$this->speak( "[$$] Generic NACK arrived from " . $hdl->{id} );
+	$this->log( "warning", "Generic NACK arrived from " . $hdl->{id} . " Ignoring it." );
+
+}
+
+sub _kick {
+	my $this = shift;
+
+	my $list = $this->{'shm'}; 
+	foreach my $connect_id ( keys %$list ) {
+		if ( defined( $list->{$connect_id}->{'kick'} ) ) {
+			my $login = $list->{$connect_id}->{'login'};
+			$this->_shutup($login);
+		}
+	}
+}
+
+sub _reload {
+	my $this = shift;
+  	$this->log("warning","Got USR1. Reloading."); 
+}
+
+sub _shutup {
+	my ( $this, $login ) = @_;
+
+	my $list = $this->{'shm'}; 
+
+	foreach my $hdl ( values %{ $this->handlers } ) {
+		my $system_id = $hdl->{'system_id'};
+		if ( $system_id eq $login ) {
+			my $seq = $hdl->{smpp}->unbind();
+			if ( defined ( $list->{$magickey}->{'trace'}->{$login} ) ) {
+				if ( $list->{$magickey}->{'trace'}->{$login} == 1 ) { 
+					$this->log("info","Send cmd_unbind in _shutup() method to $login"); 
+				}
+			} 	
+		}
+	}
+}
+
+sub cmd_enquire_link {
+
+	my ( $this, $pdu, $hdl ) = @_;
+
+	$this->log("info", "enquire_link from " . $hdl->{id} );
+
+	my $resp = $hdl->{smpp}->enquire_link_resp(
+		seq    => $pdu->{seq},
+		status => 0x00000000,
+	);
+
+}
+
+sub _trace_esme { 
+	my ( $this, $pdu, $hdl, $command_id ) = @_;
+
+	my $magickey = $this->{'magickey'}; 
+	my $login = $hdl->{system_id}; 
+
+  unless ( defined ($login ) ) { 
+		return undef; 
+	} 
+
+	my $list = decode_json( $this->shm->fetch );
+	unless ( defined ( $list->{$magickey}->{'tracelist'}->{$login} ) ) { 
+		return undef; 
+	} 
+	if ( $list->{$magickey}->{'tracelist'}->{$login} == 0 ) { 
+		return undef; 
+	} 
+
+  # Dump PDU 
+	$this->log("info","PDU dump for ".$login." while trace flag is on.");
+	
+	my @lines = NetSDS::Util::PDUAnalyzer->decode($command_id, $pdu);
+	foreach my $line (@lines) { 
+		$this->log("info",$line);
+	}
+
+}
+
+sub _trace_resp { 
+	my $this = shift; 
+	my $hdl  = shift; 
+	my $resp = shift; 
+
+	my $magickey = $this->{'magickey'}; 
+	my $list = decode_json( $this->shm->fetch );
+
+	my $login = $hdl->{'system_id'};
+	if ( defined ( $list->{$magickey}->{'tracelist'}->{$login} ) ) {
+		if ( $list->{$magickey}->{'tracelist'}->{$login} == 1 ) { 
+			$this->log("info","Send to $login: ". Dumper ($resp)); 
+		}
+	} 	
+}
+
+sub main_loop {
+
+	my ( $this, %params ) = @_;
+	my $t1 = time(); 
+	my $t2 = time(); 
+
+	# Run user defined hooks on startup
+	$this->start();
+
+	# Run main process loop
+	while ( !$this->{to_finalize} ) {
+		# Clean DLR repo 
+		# When check_delivery_requests is set 
+		# One time per 10 minutes
+		$t2 = time();
+		if ( ( $t2 - $t1 ) > 600 ) {  
+			if ( defined ( $this->{conf}->{'in_queue'}->{'check_delivery_requests'} ) ) { 
+				$this->{'plugindb'}->_dl_expire();
+				$t1 = time();
+			}
+		}
+
+		# Wait for incoming events on all sockets
+		my ( $sel_r, $sel_w, $sel_x ) = IO::Select->select( $this->selector, undef, undef, 0.0005 );
+
+		# Go through available for reading sockets
+		if ( $sel_r and my @readers = @{$sel_r} ) {
+
+			# Check all sockets ready for reading
+			foreach my $reader (@readers) {
+
+				no warnings 'uninitialized';
+
+				if ( $reader eq $this->listener ) {
+
+					# Process incoming connection
+					$this->_accept_incoming();
+
+				} else {
+
+					# Process events from established SMPP connection
+					foreach my $hdl_key ( keys %{ $this->handlers } ) {
+						if ( $this->handlers->{$hdl_key} and ( $this->handlers->{$hdl_key}->{smpp} eq $reader ) ) {
+							$this->_process_socket( $this->handlers->{$hdl_key} );
+						}
+					}
+
+				}
+				;    ## end if ( $reader eq $this->listener )
+
+				use warnings 'all';
+
+			} ## end foreach my $reader (@readers)
+
+		} ## end if ( $sel_r and my @readers...
+
+	} ## end while ( !$this->{to_finalize...
+
+	# Run user defined hooks on shutdown
+	$this->stop();
+
+} ## end sub main_loop
+
+
+
+
+1;
+#===============================================================================
+
+__END__
+
+=head1 NAME
+
+smppd.pl
+
+=head1 SYNOPSIS
+
+smppd.pl
+
+=head1 DESCRIPTION
+
+FIXME
+
+=head1 EXAMPLES
+
+FIXME
+
+=head1 BUGS
+
+Unknown.
+
+=head1 TODO
+
+Empty.
+
+=head1 AUTHOR
+
+Michael Bochkaryov <misha@rattler.kiev.ua>
+Alex Radetsky <rad@rad.kiev.ua>
+
+=cut
+

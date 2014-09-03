@@ -72,7 +72,7 @@ sub new {
 	my $this = $class->SUPER::new();
 	$this->{shm} = $shm; 
 	$this->{conf} = $conf; 
-	$this->{debug} = 1; 
+
 	return $this;
 
 }
@@ -94,15 +94,16 @@ __PACKAGE__->mk_accessors(qw/msgsth/);
 
 sub _process_mo_dlr {
 
-	my ( $this, %params ) = @_;
+	my ( $this, $list, %params ) = @_;
 	$this->_connect_db;
 
 	# Here we will be read database
-	my $queue_msgs = $this->_get_mo;
+	my $queue_msgs = $this->_get_mo($list);
 	my $count      = keys %$queue_msgs;
 	if ( $count == 0 ) {    # No more records
 		return 0; 
 	}
+
 	$this->log("info","Fetched $count messages from DB for delivery");
 
 	my $res = {};
@@ -213,7 +214,7 @@ sub _delete_mo {
 		$table = $this->{conf}->{'out_queue'}->{'table'};
 	}
 
-  	$this->_connect_db;
+  $this->_connect_db;
 	$this->msgdbh->do( "delete from " . $table . " where id=$mo_id" );
 
 }
@@ -231,25 +232,20 @@ sub _connect_db {
 		$user   = $this->{conf}->{'out_queue'}->{'db-user'};
 		$passwd = $this->{conf}->{'out_queue'}->{'db-password'};
 	}
-
 	while (1) {
 		# If DBMS isn' t accessible - try reconnect
 
 		if ( !$this->msgdbh or !$this->msgdbh->ping ) {
-			if ( $this->{debug} ) { 
-				warn ("[OUTQ] Connecting to database: $dsn,$user"); 
-			}
 			$this->msgdbh( DBI->connect_cached( $dsn, $user, $passwd, { RaiseError => 1 } ) );
 		}
 
 		if ( !$this->msgdbh ) {
-			$this->speak("Can't connect to DBMS. Waiting for 30 sec. "); 
 			$this->log( "error", "Cant connect to DBMS! Waiting for 30 sec." );
 			sleep(30);
 			next;
 		}
 
-    		if ( defined ( $this->{conf}->{'out_queue'}->{'mysql-set-names'} ) ) {
+    if ( defined ( $this->{conf}->{'out_queue'}->{'mysql-set-names'} ) ) {
 			    my $q = 'set names ' . $this->{conf}->{'in_queue'}->{'mysql-set-names'};
 					$this->msgdbh->do ($q);
 		}
@@ -259,9 +255,14 @@ sub _connect_db {
 
 } ## end sub _connect_db
 
+#
+# Получение Mobile Originated / Delivery Notifications для списка коннектов, которые переданы в $list
+# Возвращает массив сообщений 
+# 
+
 sub _get_mo {
 
-	my ( $this, @params ) = @_;
+	my ( $this, $list, @params ) = @_;
 	$this->_connect_db;
 
 	my $table = MYSQL_TABLE;
@@ -272,26 +273,20 @@ sub _get_mo {
 	my $query = undef;
 	my $res   = {};
 
-	# List active EMSEs
-	my $list          = decode_json( $this->{shm}->fetch );
-	my $my_local_data = defined( $this->conf->{'shm'}->{'magickey'} ) ? $this->conf->{'shm'}->{'magickey'} : 'My L0c4l D4t4';
+	foreach my $login ( keys %$list ) {
 
-		foreach my $login ( keys %$list ) {
-			if ( $login eq $my_local_data ) {
-				next;
-			}
+		my $mode      = $list->{$login}->{'mode'};
+		my $bandwidth = $list->{$login}->{'bandwidth'};
+		my $esme_id   = $list->{$login}->{'esme_id'};
 
-			my $mode      = $list->{$login}->{'mode'};
-			my $bandwidth = $list->{$login}->{'bandwidth'};
-			my $esme_id   = $list->{$login}->{'esme_id'};
+		if ( ( $mode eq 'transciever' ) or ( $mode eq 'receiver' ) ) {
+			$query = "select id,msg_type,esme_id,src_addr,dst_addr,body,coding,udh,mwi,mclass,validity,deferred,message_id,registered_delivery,service_type,extra from " . $table . " where msg_type='MO' or msg_type='DLR' and esme_id = $esme_id order by id limit $bandwidth";
 
-			if ( ( $mode eq 'transciever' ) or ( $mode eq 'receiver' ) ) {
-				$query = "select id,msg_type,esme_id,src_addr,dst_addr,body,coding,udh,mwi,mclass,validity,deferred,message_id,registered_delivery,service_type,extra from " . $table . " where msg_type='MO' or msg_type='DLR' and esme_id = $esme_id order by id limit $bandwidth";
-				$this->log( "debug", "MO-DLR query: $query" ) if ( $this->debug );
-				my $res_esme = $this->msgdbh->selectall_hashref( $query, "id" );
-				$res = { %$res, %$res_esme };
-			}
+			$this->log( "debug", "MO-DLR query: $query" ) if ( $this->debug );
+			my $res_esme = $this->msgdbh->selectall_hashref( $query, "id" );
+			$res = { %$res, %$res_esme };
 		}
+	}
 
 	$this->log( "debug", "Returning " . keys(%$res) . " messages to push out." ) if ( $this->debug );
 	return $res;
