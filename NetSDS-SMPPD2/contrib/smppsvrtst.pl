@@ -97,7 +97,7 @@ $seq = $cli->submit_sm(
 		registered_delivery => 1, 
     'data_coding'      => '2',
     'source_addr'      => 'smppsvrtst.pl',
-    'destination_addr' => '380504139380',
+    'destination_addr' => '380445556677',
     short_message      => 'Test message from smppsvrtst.pl'
 ) or die;
 $pdu = $cli->read_pdu() or die;
@@ -126,7 +126,7 @@ $seq =
 for ( my $cx = 0 ; $cx < 1000 ; $cx++ ) {
     $seq = $cli3->submit_sm(
 				registered_delivery => 1, 
-        'destination_addr' => '380504139380',
+        'destination_addr' => '380445556677',
         short_message      => 'Test message from smppsvrtst.pl'
     ) or die;
     $pdu = $cli3->read_pdu() or die;
@@ -243,7 +243,7 @@ else {
 $seq = $cli->submit_sm(
     'data_coding'      => '2',
     'source_addr'      => 'INVALID',
-    'destination_addr' => '380504139380',
+    'destination_addr' => '380445556677',
     short_message      => 'Test message from INVALID'
 ) or die;
 $pdu = $cli->read_pdu() or die;
@@ -260,14 +260,14 @@ else {
 $seq = $cli->submit_sm(
     'data_coding'      => '2',
     'source_addr'      => 'smppsvrtst.pl',
-    'destination_addr' => '380504139380',
+    'destination_addr' => '380445556677',
     short_message      => 'Test message from smppsvrtst.pl'
 ) or die;
 $pdu = $cli->read_pdu() or die;
 $seq = $cli->submit_sm(
     'data_coding'      => '2',
     'source_addr'      => 'smppsvrtst.pl',
-    'destination_addr' => '380504139380',
+    'destination_addr' => '380445556677',
     short_message      => 'Test message from smppsvrtst.pl'
 ) or die;
 $pdu = $cli->read_pdu() or die;
@@ -313,7 +313,7 @@ my $extra = to_json( $tlv, { ascii => 1, pretty => 1 } );
 my $dlr   = "id:$msgid sub:001 dlvrd:001 submit date:1011190000 done date:1011192359 stat:DELIVRD err:E Text: Hello, World! ";
 
  $sth = $dbh->prepare_cached("insert into messages ( msg_type, esme_id, src_addr, dst_addr, body, coding, udh, mwi, mclass, message_id, validity, deferred, registered_delivery, service_type, extra ) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,? ) ");
-$sth->execute( 'DLR', 1, '0504139380', 'smppsvrtst.pl', $dlr, 0, undef, undef, 4, $msgid, 1440, undef, undef, undef, $extra );
+$sth->execute( 'DLR', 1, '0445556677', 'smppsvrtst.pl', $dlr, 0, undef, undef, 4, $msgid, 1440, undef, undef, undef, $extra );
 
 # Test #16. Receive DLR 
 $pdu = $cli->read_pdu() or die;
